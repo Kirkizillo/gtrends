@@ -123,8 +123,8 @@ class TrendsScraper:
             except Exception as e:
                 if '429' in str(e):
                     if attempt < max_retries - 1:
-                        # Espera exponencial con jitter aleatorio (más tiempo)
-                        wait_time = (120 * (2 ** attempt)) + random.randint(30, 60)
+                        # Espera exponencial con jitter aleatorio
+                        wait_time = (60 * (2 ** attempt)) + random.randint(10, 30)
                         logger.warning(
                             f"Rate limit 429. Intento {attempt + 1}/{max_retries}. "
                             f"Esperando {wait_time}s..."

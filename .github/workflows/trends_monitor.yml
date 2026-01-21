@@ -21,6 +21,11 @@ on:
           - 'group_2'
           - 'group_3'
 
+# Permisos necesarios para crear issues
+permissions:
+  contents: read
+  issues: write
+
 jobs:
   # Determinar qué grupo ejecutar basado en la hora
   determine-group:
@@ -85,7 +90,7 @@ jobs:
           else
             python main.py --full
           fi
-        timeout-minutes: 30
+        timeout-minutes: 45
 
       - name: Upload logs as artifact
         if: always()
@@ -101,7 +106,7 @@ jobs:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: |
           curl -X POST -H 'Content-type: application/json' \
-            --data "{\"text\":\"⚠️ Google Trends Monitor failed!\nGroup: ${{ needs.determine-group.outputs.group || 'all' }}\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\"}" \
+            --data "{\"text\":\"Google Trends Monitor failed! Group: ${{ needs.determine-group.outputs.group || 'all' }} - Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\"}" \
             $SLACK_WEBHOOK_URL
 
       - name: Create issue on failure
@@ -109,7 +114,7 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const title = `🚨 Scraping failed - ${new Date().toISOString().split('T')[0]}`;
+            const title = `Scraping failed - ${new Date().toISOString().split('T')[0]}`;
             const body = `## Scraping Failed\n\n- **Group:** ${{ needs.determine-group.outputs.group || 'all' }}\n- **Run:** [View logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})\n- **Time:** ${new Date().toISOString()}\n\nPlease check the logs for more details.`;
 
             // Check if similar issue exists in last 24h
