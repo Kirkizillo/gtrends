@@ -41,6 +41,7 @@ jobs:
 
       - name: Run Google Trends Monitor
         run: python main.py
+        timeout-minutes: 15
 
       - name: Upload logs as artifact
         if: always()
