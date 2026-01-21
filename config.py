@@ -86,7 +86,8 @@ SHEET_NAMES = {
     "topics_top": "Related_Topics_Top",
     "topics_rising": "Related_Topics_Rising",
     "queries_top": "Related_Queries_Top",
-    "queries_rising": "Related_Queries_Rising"
+    "queries_rising": "Related_Queries_Rising",
+    "interest_over_time": "Interest_Over_Time"
 }
 
 # =============================================================================

@@ -2,9 +2,10 @@
 Scraper de Google Trends usando PyTrends.
 """
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
 from dataclasses import dataclass, field
+from urllib.parse import quote_plus
 
 from pytrends.request import TrendReq
 
@@ -99,8 +100,8 @@ class TrendsScraper:
         )
 
     def _get_timestamp(self) -> str:
-        """Retorna timestamp actual en formato ISO."""
-        return datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+        """Retorna timestamp actual en formato ISO (UTC)."""
+        return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
     def _fetch_with_retry(self, fetch_func, max_retries: int = 3):
         """
@@ -171,15 +172,16 @@ class TrendsScraper:
             if term_data.get('top') is not None and not term_data['top'].empty:
                 df_top = term_data['top']
                 for _, row in df_top.iterrows():
+                    query_text = str(row.get('query', ''))
                     result.data.append(TrendData(
                         timestamp=timestamp,
                         term=term,
                         country_code=geo,
                         country_name=country_name,
                         data_type='queries_top',
-                        title=str(row.get('query', '')),
+                        title=query_text,
                         value=str(row.get('value', '')),
-                        link=f"https://trends.google.com/trends/explore?q={row.get('query', '')}&geo={geo}"
+                        link=f"https://trends.google.com/trends/explore?q={quote_plus(query_text)}&geo={geo}"
                     ))
                 logger.info(f"Extraídos {len(df_top)} Top Queries para '{term}'")
 
@@ -187,15 +189,16 @@ class TrendsScraper:
             if term_data.get('rising') is not None and not term_data['rising'].empty:
                 df_rising = term_data['rising']
                 for _, row in df_rising.iterrows():
+                    query_text = str(row.get('query', ''))
                     result.data.append(TrendData(
                         timestamp=timestamp,
                         term=term,
                         country_code=geo,
                         country_name=country_name,
                         data_type='queries_rising',
-                        title=str(row.get('query', '')),
+                        title=query_text,
                         value=str(row.get('value', '')),
-                        link=f"https://trends.google.com/trends/explore?q={row.get('query', '')}&geo={geo}"
+                        link=f"https://trends.google.com/trends/explore?q={quote_plus(query_text)}&geo={geo}"
                     ))
                 logger.info(f"Extraídos {len(df_rising)} Rising Queries para '{term}'")
 
@@ -244,17 +247,17 @@ class TrendsScraper:
             if term_data.get('top') is not None and not term_data['top'].empty:
                 df_top = term_data['top']
                 for _, row in df_top.iterrows():
-                    topic_title = row.get('topic_title', '')
-                    topic_mid = row.get('topic_mid', '')
+                    topic_title = str(row.get('topic_title', ''))
+                    topic_mid = str(row.get('topic_mid', ''))
                     result.data.append(TrendData(
                         timestamp=timestamp,
                         term=term,
                         country_code=geo,
                         country_name=country_name,
                         data_type='topics_top',
-                        title=str(topic_title),
+                        title=topic_title,
                         value=str(row.get('value', '')),
-                        link=f"https://trends.google.com/trends/explore?q={topic_mid}&geo={geo}" if topic_mid else ""
+                        link=f"https://trends.google.com/trends/explore?q={quote_plus(topic_mid)}&geo={geo}" if topic_mid else ""
                     ))
                 logger.info(f"Extraídos {len(df_top)} Top Topics para '{term}'")
 
@@ -262,17 +265,17 @@ class TrendsScraper:
             if term_data.get('rising') is not None and not term_data['rising'].empty:
                 df_rising = term_data['rising']
                 for _, row in df_rising.iterrows():
-                    topic_title = row.get('topic_title', '')
-                    topic_mid = row.get('topic_mid', '')
+                    topic_title = str(row.get('topic_title', ''))
+                    topic_mid = str(row.get('topic_mid', ''))
                     result.data.append(TrendData(
                         timestamp=timestamp,
                         term=term,
                         country_code=geo,
                         country_name=country_name,
                         data_type='topics_rising',
-                        title=str(topic_title),
+                        title=topic_title,
                         value=str(row.get('value', '')),
-                        link=f"https://trends.google.com/trends/explore?q={topic_mid}&geo={geo}" if topic_mid else ""
+                        link=f"https://trends.google.com/trends/explore?q={quote_plus(topic_mid)}&geo={geo}" if topic_mid else ""
                     ))
                 logger.info(f"Extraídos {len(df_rising)} Rising Topics para '{term}'")
 
@@ -284,11 +287,65 @@ class TrendsScraper:
 
         return result
 
+    def scrape_interest_over_time(
+        self,
+        term: str,
+        geo: str,
+        country_name: str
+    ) -> ScrapingResult:
+        """
+        Extrae Interest Over Time para un término.
+
+        Args:
+            term: Término de búsqueda
+            geo: Código de país (ej: 'IN')
+            country_name: Nombre del país
+
+        Returns:
+            ScrapingResult con los datos extraídos
+        """
+        result = ScrapingResult(success=False)
+        timestamp = self._get_timestamp()
+
+        try:
+            self._build_payload(term, geo)
+            interest_df = self._fetch_with_retry(lambda: self.pytrends.interest_over_time())
+
+            if interest_df is None or interest_df.empty:
+                logger.warning(f"No se encontró interest over time para '{term}'")
+                result.success = True
+                return result
+
+            # Procesar datos de interés
+            if term in interest_df.columns:
+                for idx, row in interest_df.iterrows():
+                    time_point = idx.strftime("%Y-%m-%d %H:%M:%S") if hasattr(idx, 'strftime') else str(idx)
+                    result.data.append(TrendData(
+                        timestamp=timestamp,
+                        term=term,
+                        country_code=geo,
+                        country_name=country_name,
+                        data_type='interest_over_time',
+                        title=time_point,  # Usamos title para el punto temporal
+                        value=str(row[term]),
+                        link=f"https://trends.google.com/trends/explore?q={quote_plus(term)}&geo={geo}"
+                    ))
+                logger.info(f"Extraídos {len(interest_df)} puntos de Interest Over Time para '{term}'")
+
+            result.success = True
+
+        except Exception as e:
+            result.error_message = str(e)
+            logger.error(f"Error extrayendo interest over time para '{term}': {e}")
+
+        return result
+
     def scrape_all(
         self,
         terms: List[str] = None,
         regions: Dict[str, str] = None,
-        include_topics: bool = False
+        include_topics: bool = False,
+        include_interest: bool = False
     ) -> List[TrendData]:
         """
         Ejecuta scraping completo para todos los términos y regiones.
@@ -296,7 +353,8 @@ class TrendsScraper:
         Args:
             terms: Lista de términos (default: config.CURRENT_TERMS)
             regions: Dict de regiones {código: nombre} (default: config.CURRENT_REGIONS)
-            include_topics: Si incluir Related Topics (Fase 2+)
+            include_topics: Si incluir Related Topics
+            include_interest: Si incluir Interest Over Time
 
         Returns:
             Lista de TrendData con todos los resultados
@@ -333,8 +391,47 @@ class TrendsScraper:
                     else:
                         logger.error(f"Falló extracción de topics: {topics_result.error_message}")
 
-        logger.info(f"Scraping completado. Total registros: {len(all_data)}")
-        return all_data
+                # Extraer Interest Over Time (solo si está habilitado)
+                if include_interest:
+                    interest_result = self.scrape_interest_over_time(term, geo, country_name)
+                    if interest_result.success:
+                        all_data.extend(interest_result.data)
+                    else:
+                        logger.error(f"Falló extracción de interest: {interest_result.error_message}")
+
+        # Deduplicar datos antes de retornar
+        deduplicated_data = self._deduplicate(all_data)
+
+        logger.info(f"Scraping completado. Total registros: {len(deduplicated_data)} (de {len(all_data)} antes de deduplicar)")
+        return deduplicated_data
+
+    def _deduplicate(self, data: List[TrendData]) -> List[TrendData]:
+        """
+        Elimina duplicados basándose en term + country + data_type + title.
+
+        Args:
+            data: Lista de TrendData
+
+        Returns:
+            Lista sin duplicados
+        """
+        seen = set()
+        unique_data = []
+
+        for item in data:
+            # Crear clave única
+            key = (item.term, item.country_code, item.data_type, item.title)
+
+            if key not in seen:
+                seen.add(key)
+                unique_data.append(item)
+            else:
+                logger.debug(f"Duplicado eliminado: {item.title} ({item.data_type})")
+
+        if len(data) != len(unique_data):
+            logger.info(f"Eliminados {len(data) - len(unique_data)} duplicados")
+
+        return unique_data
 
 
 # Para pruebas directas

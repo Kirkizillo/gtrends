@@ -8,6 +8,9 @@ credentials.json
 logs/
 *.log
 
+# Backups
+backups/
+
 # Python
 __pycache__/
 *.py[cod]

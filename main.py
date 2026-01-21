@@ -16,6 +16,7 @@ from datetime import datetime
 import config
 from trends_scraper import TrendsScraper
 from google_sheets_exporter import GoogleSheetsExporter
+from backup import save_backup, cleanup_old_backups
 
 
 def setup_logging():
@@ -84,6 +85,59 @@ def run_setup(logger):
         sys.exit(1)
 
 
+def run_health_check(logger) -> bool:
+    """
+    Verifica la conectividad con Google Trends y Google Sheets.
+
+    Returns:
+        True si todo está OK
+    """
+    logger.info("=== Health Check ===")
+    all_ok = True
+
+    # 1. Verificar Google Sheets
+    logger.info("\n[1/2] Verificando conexión a Google Sheets...")
+    try:
+        exporter = GoogleSheetsExporter()
+        if exporter.connect():
+            counts = exporter.get_row_counts()
+            total_rows = sum(counts.values())
+            logger.info(f"  ✅ Google Sheets OK - {total_rows} filas totales")
+        else:
+            logger.error("  ❌ Google Sheets - No se pudo conectar")
+            all_ok = False
+    except Exception as e:
+        logger.error(f"  ❌ Google Sheets - Error: {e}")
+        all_ok = False
+
+    # 2. Verificar Google Trends (intento básico)
+    logger.info("\n[2/2] Verificando conexión a Google Trends...")
+    try:
+        from pytrends.request import TrendReq
+        pytrends = TrendReq(hl='en-US', tz=360, timeout=(5, 10))
+        # Intento con trending searches (menos restrictivo que build_payload)
+        trending = pytrends.trending_searches(pn='united_states')
+        if trending is not None and not trending.empty:
+            logger.info(f"  ✅ Google Trends OK - Trending disponible")
+        else:
+            logger.warning("  ⚠️ Google Trends - Respuesta vacía (puede ser rate limiting)")
+    except Exception as e:
+        if '429' in str(e):
+            logger.warning(f"  ⚠️ Google Trends - Rate limited (429), pero conectividad OK")
+        else:
+            logger.error(f"  ❌ Google Trends - Error: {e}")
+            all_ok = False
+
+    # Resumen
+    logger.info("\n" + "="*40)
+    if all_ok:
+        logger.info("✅ Health check PASSED")
+    else:
+        logger.error("❌ Health check FAILED")
+
+    return all_ok
+
+
 def run_test_scraper(logger):
     """Ejecuta el scraper sin exportar (para pruebas)."""
     logger.info("=== Modo prueba: Solo scraping ===")
@@ -109,15 +163,21 @@ def run_test_scraper(logger):
             logger.info(f"  [{item.data_type}] {item.title}: {item.value}")
 
 
-def run_monitor(logger, include_topics: bool = False, group: str = None):
+def run_monitor(logger, include_topics: bool = False, include_interest: bool = False, group: str = None):
     """
     Ejecuta el ciclo completo de monitoreo.
 
     Args:
-        include_topics: Si incluir Related Topics (Fase 2+)
+        include_topics: Si incluir Related Topics
+        include_interest: Si incluir Interest Over Time
         group: Grupo de países a ejecutar (group_1, group_2, group_3) o None para todos
     """
-    mode = "COMPLETO" if include_topics else "MVP (solo queries)"
+    features = []
+    if include_topics:
+        features.append("Topics")
+    if include_interest:
+        features.append("Interest")
+    mode = f"COMPLETO ({', '.join(features)})" if features else "MVP (solo queries)"
 
     # Filtrar regiones por grupo si se especifica
     if group and hasattr(config, 'COUNTRY_GROUPS') and group in config.COUNTRY_GROUPS:
@@ -134,13 +194,21 @@ def run_monitor(logger, include_topics: bool = False, group: str = None):
     # Fase 1: Scraping
     logger.info("\n[1/2] Extrayendo datos de Google Trends...")
     scraper = TrendsScraper()
-    data = scraper.scrape_all(regions=regions, include_topics=include_topics)
+    data = scraper.scrape_all(regions=regions, include_topics=include_topics, include_interest=include_interest)
 
     if not data:
         logger.warning("No se extrajeron datos. Finalizando.")
         return
 
     logger.info(f"Extraídos {len(data)} registros")
+
+    # Guardar backup local
+    backup_path = save_backup(data, group)
+    if backup_path:
+        logger.info(f"Backup guardado: {backup_path}")
+
+    # Limpiar backups antiguos (más de 7 días)
+    cleanup_old_backups(keep_days=7)
 
     # Fase 2: Exportación
     logger.info("\n[2/2] Exportando a Google Sheets...")
@@ -193,6 +261,16 @@ def main():
         choices=['group_1', 'group_2', 'group_3'],
         help='Ejecutar solo un grupo de países (para distribución)'
     )
+    parser.add_argument(
+        '--interest',
+        action='store_true',
+        help='Incluir Interest Over Time en la extracción'
+    )
+    parser.add_argument(
+        '--health',
+        action='store_true',
+        help='Ejecutar health check de conectividad'
+    )
 
     args = parser.parse_args()
 
@@ -203,6 +281,11 @@ def main():
     if args.test_scraper:
         run_test_scraper(logger)
         return
+
+    # Health check
+    if args.health:
+        success = run_health_check(logger)
+        sys.exit(0 if success else 1)
 
     # Validar configuración para modos que usan Sheets
     if not validate_config(logger):
@@ -216,7 +299,7 @@ def main():
     if args.setup:
         run_setup(logger)
     else:
-        run_monitor(logger, include_topics=args.full, group=args.group)
+        run_monitor(logger, include_topics=args.full, include_interest=args.interest, group=args.group)
 
 
 if __name__ == "__main__":

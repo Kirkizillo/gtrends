@@ -108,7 +108,8 @@ class GoogleSheetsExporter:
             'queries_top': config.SHEET_NAMES['queries_top'],
             'queries_rising': config.SHEET_NAMES['queries_rising'],
             'topics_top': config.SHEET_NAMES['topics_top'],
-            'topics_rising': config.SHEET_NAMES['topics_rising']
+            'topics_rising': config.SHEET_NAMES['topics_rising'],
+            'interest_over_time': config.SHEET_NAMES['interest_over_time']
         }
         return mapping.get(data_type, 'Unknown')
 
