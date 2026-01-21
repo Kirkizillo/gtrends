@@ -86,9 +86,9 @@ jobs:
         run: |
           GROUP="${{ needs.determine-group.outputs.group }}"
           if [ -n "$GROUP" ]; then
-            python main.py --full --interest --group $GROUP
+            python main.py --interest --group $GROUP
           else
-            python main.py --full --interest
+            python main.py --interest
           fi
         timeout-minutes: 45
 
