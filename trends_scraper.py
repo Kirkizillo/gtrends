@@ -83,6 +83,40 @@ class TrendsScraper:
         """Retorna timestamp actual en formato ISO."""
         return datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
 
+    def _fetch_with_retry(self, fetch_func, max_retries: int = 3):
+        """
+        Ejecuta una función de fetch con reintentos para errores 429.
+
+        Args:
+            fetch_func: Función a ejecutar
+            max_retries: Número máximo de reintentos
+
+        Returns:
+            Resultado de la función
+        """
+        import time
+        import random
+
+        for attempt in range(max_retries):
+            try:
+                return fetch_func()
+            except Exception as e:
+                if '429' in str(e):
+                    if attempt < max_retries - 1:
+                        # Espera exponencial con jitter aleatorio
+                        wait_time = (60 * (2 ** attempt)) + random.randint(10, 30)
+                        logger.warning(
+                            f"Rate limit 429. Intento {attempt + 1}/{max_retries}. "
+                            f"Esperando {wait_time}s..."
+                        )
+                        time.sleep(wait_time)
+                        # Reinicializar pytrends con nueva sesión
+                        self._init_pytrends()
+                    else:
+                        raise
+                else:
+                    raise
+
     def scrape_related_queries(
         self,
         term: str,
@@ -105,7 +139,7 @@ class TrendsScraper:
 
         try:
             self._build_payload(term, geo)
-            queries = self.pytrends.related_queries()
+            queries = self._fetch_with_retry(lambda: self.pytrends.related_queries())
 
             if not queries or term not in queries:
                 logger.warning(f"No se encontraron queries para '{term}'")
@@ -178,7 +212,7 @@ class TrendsScraper:
 
         try:
             self._build_payload(term, geo)
-            topics = self.pytrends.related_topics()
+            topics = self._fetch_with_retry(lambda: self.pytrends.related_topics())
 
             if not topics or term not in topics:
                 logger.warning(f"No se encontraron topics para '{term}'")
