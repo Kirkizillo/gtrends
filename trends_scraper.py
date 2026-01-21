@@ -1,0 +1,304 @@
+"""
+Scraper de Google Trends usando PyTrends.
+"""
+import logging
+from datetime import datetime
+from typing import Dict, List, Optional
+from dataclasses import dataclass, field
+
+from pytrends.request import TrendReq
+
+import config
+from rate_limiter import RateLimiter, retry_with_backoff
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class TrendData:
+    """Estructura para almacenar datos de tendencias."""
+    timestamp: str
+    term: str
+    country_code: str
+    country_name: str
+    data_type: str  # 'queries_top', 'queries_rising', 'topics_top', 'topics_rising'
+    title: str
+    value: str
+    link: str = ""
+
+
+@dataclass
+class ScrapingResult:
+    """Resultado del scraping con datos y metadatos."""
+    success: bool
+    data: List[TrendData] = field(default_factory=list)
+    error_message: str = ""
+
+
+class TrendsScraper:
+    """
+    Scraper para extraer datos de Google Trends.
+    """
+
+    def __init__(self):
+        self.rate_limiter = RateLimiter(config.RATE_LIMIT_SECONDS)
+        self.pytrends = None
+        self._init_pytrends()
+
+    def _init_pytrends(self):
+        """Inicializa la conexión con Google Trends."""
+        try:
+            # Nota: No usamos retries/backoff_factor aquí porque causan
+            # incompatibilidad con urllib3 2.x. Manejamos reintentos manualmente.
+            # Usamos requests_args con headers de navegador para evitar bloqueos 429
+            self.pytrends = TrendReq(
+                hl='en-US',
+                tz=360,
+                timeout=(10, 25),
+                requests_args={
+                    'headers': {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                        'Accept': 'application/json, text/plain, */*',
+                        'Accept-Language': 'en-US,en;q=0.9',
+                    }
+                }
+            )
+            logger.info("PyTrends inicializado correctamente")
+        except Exception as e:
+            logger.error(f"Error inicializando PyTrends: {e}")
+            raise
+
+    @retry_with_backoff(max_retries=config.MAX_RETRIES, base_delay=config.RETRY_DELAY_SECONDS)
+    def _build_payload(self, term: str, geo: str):
+        """Construye el payload para una búsqueda."""
+        self.rate_limiter.wait()
+        logger.info(f"Construyendo payload para '{term}' en {geo}")
+        self.pytrends.build_payload(
+            kw_list=[term],
+            timeframe=config.TIMEFRAME,
+            geo=geo
+        )
+
+    def _get_timestamp(self) -> str:
+        """Retorna timestamp actual en formato ISO."""
+        return datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+
+    def scrape_related_queries(
+        self,
+        term: str,
+        geo: str,
+        country_name: str
+    ) -> ScrapingResult:
+        """
+        Extrae Related Queries (Top y Rising) para un término.
+
+        Args:
+            term: Término de búsqueda
+            geo: Código de país (ej: 'IN')
+            country_name: Nombre del país
+
+        Returns:
+            ScrapingResult con los datos extraídos
+        """
+        result = ScrapingResult(success=False)
+        timestamp = self._get_timestamp()
+
+        try:
+            self._build_payload(term, geo)
+            queries = self.pytrends.related_queries()
+
+            if not queries or term not in queries:
+                logger.warning(f"No se encontraron queries para '{term}'")
+                result.success = True
+                return result
+
+            term_data = queries[term]
+
+            # Procesar Top Queries
+            if term_data.get('top') is not None and not term_data['top'].empty:
+                df_top = term_data['top']
+                for _, row in df_top.iterrows():
+                    result.data.append(TrendData(
+                        timestamp=timestamp,
+                        term=term,
+                        country_code=geo,
+                        country_name=country_name,
+                        data_type='queries_top',
+                        title=str(row.get('query', '')),
+                        value=str(row.get('value', '')),
+                        link=f"https://trends.google.com/trends/explore?q={row.get('query', '')}&geo={geo}"
+                    ))
+                logger.info(f"Extraídos {len(df_top)} Top Queries para '{term}'")
+
+            # Procesar Rising Queries
+            if term_data.get('rising') is not None and not term_data['rising'].empty:
+                df_rising = term_data['rising']
+                for _, row in df_rising.iterrows():
+                    result.data.append(TrendData(
+                        timestamp=timestamp,
+                        term=term,
+                        country_code=geo,
+                        country_name=country_name,
+                        data_type='queries_rising',
+                        title=str(row.get('query', '')),
+                        value=str(row.get('value', '')),
+                        link=f"https://trends.google.com/trends/explore?q={row.get('query', '')}&geo={geo}"
+                    ))
+                logger.info(f"Extraídos {len(df_rising)} Rising Queries para '{term}'")
+
+            result.success = True
+
+        except Exception as e:
+            result.error_message = str(e)
+            logger.error(f"Error extrayendo queries para '{term}': {e}")
+
+        return result
+
+    def scrape_related_topics(
+        self,
+        term: str,
+        geo: str,
+        country_name: str
+    ) -> ScrapingResult:
+        """
+        Extrae Related Topics (Top y Rising) para un término.
+
+        NOTA: Esta función se usa en Fase 2+
+
+        Args:
+            term: Término de búsqueda
+            geo: Código de país (ej: 'IN')
+            country_name: Nombre del país
+
+        Returns:
+            ScrapingResult con los datos extraídos
+        """
+        result = ScrapingResult(success=False)
+        timestamp = self._get_timestamp()
+
+        try:
+            self._build_payload(term, geo)
+            topics = self.pytrends.related_topics()
+
+            if not topics or term not in topics:
+                logger.warning(f"No se encontraron topics para '{term}'")
+                result.success = True
+                return result
+
+            term_data = topics[term]
+
+            # Procesar Top Topics
+            if term_data.get('top') is not None and not term_data['top'].empty:
+                df_top = term_data['top']
+                for _, row in df_top.iterrows():
+                    topic_title = row.get('topic_title', '')
+                    topic_mid = row.get('topic_mid', '')
+                    result.data.append(TrendData(
+                        timestamp=timestamp,
+                        term=term,
+                        country_code=geo,
+                        country_name=country_name,
+                        data_type='topics_top',
+                        title=str(topic_title),
+                        value=str(row.get('value', '')),
+                        link=f"https://trends.google.com/trends/explore?q={topic_mid}&geo={geo}" if topic_mid else ""
+                    ))
+                logger.info(f"Extraídos {len(df_top)} Top Topics para '{term}'")
+
+            # Procesar Rising Topics
+            if term_data.get('rising') is not None and not term_data['rising'].empty:
+                df_rising = term_data['rising']
+                for _, row in df_rising.iterrows():
+                    topic_title = row.get('topic_title', '')
+                    topic_mid = row.get('topic_mid', '')
+                    result.data.append(TrendData(
+                        timestamp=timestamp,
+                        term=term,
+                        country_code=geo,
+                        country_name=country_name,
+                        data_type='topics_rising',
+                        title=str(topic_title),
+                        value=str(row.get('value', '')),
+                        link=f"https://trends.google.com/trends/explore?q={topic_mid}&geo={geo}" if topic_mid else ""
+                    ))
+                logger.info(f"Extraídos {len(df_rising)} Rising Topics para '{term}'")
+
+            result.success = True
+
+        except Exception as e:
+            result.error_message = str(e)
+            logger.error(f"Error extrayendo topics para '{term}': {e}")
+
+        return result
+
+    def scrape_all(
+        self,
+        terms: List[str] = None,
+        regions: Dict[str, str] = None,
+        include_topics: bool = False
+    ) -> List[TrendData]:
+        """
+        Ejecuta scraping completo para todos los términos y regiones.
+
+        Args:
+            terms: Lista de términos (default: config.CURRENT_TERMS)
+            regions: Dict de regiones {código: nombre} (default: config.CURRENT_REGIONS)
+            include_topics: Si incluir Related Topics (Fase 2+)
+
+        Returns:
+            Lista de TrendData con todos los resultados
+        """
+        if terms is None:
+            terms = config.CURRENT_TERMS
+        if regions is None:
+            regions = config.CURRENT_REGIONS
+
+        all_data = []
+        total_terms = len(terms)
+        total_regions = len(regions)
+
+        logger.info(f"Iniciando scraping: {total_terms} términos, {total_regions} regiones")
+
+        for term_idx, term in enumerate(terms, 1):
+            for geo, country_name in regions.items():
+                logger.info(
+                    f"[{term_idx}/{total_terms}] Procesando '{term}' en {country_name} ({geo})"
+                )
+
+                # Extraer Related Queries
+                queries_result = self.scrape_related_queries(term, geo, country_name)
+                if queries_result.success:
+                    all_data.extend(queries_result.data)
+                else:
+                    logger.error(f"Falló extracción de queries: {queries_result.error_message}")
+
+                # Extraer Related Topics (solo si está habilitado)
+                if include_topics:
+                    topics_result = self.scrape_related_topics(term, geo, country_name)
+                    if topics_result.success:
+                        all_data.extend(topics_result.data)
+                    else:
+                        logger.error(f"Falló extracción de topics: {topics_result.error_message}")
+
+        logger.info(f"Scraping completado. Total registros: {len(all_data)}")
+        return all_data
+
+
+# Para pruebas directas
+if __name__ == "__main__":
+    logging.basicConfig(
+        level=logging.INFO,
+        format=config.LOG_FORMAT
+    )
+
+    scraper = TrendsScraper()
+
+    # MVP: Solo queries, sin topics
+    data = scraper.scrape_all(include_topics=False)
+
+    print(f"\n{'='*60}")
+    print(f"Resultados: {len(data)} registros")
+    print(f"{'='*60}")
+
+    for item in data[:10]:  # Mostrar primeros 10
+        print(f"[{item.data_type}] {item.title}: {item.value}")

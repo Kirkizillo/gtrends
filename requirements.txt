@@ -1,0 +1,13 @@
+# Google Trends API
+pytrends>=4.9.2
+
+# Google Sheets API
+gspread>=5.12.0
+google-auth>=2.23.0
+google-auth-oauthlib>=1.1.0
+
+# Variables de entorno
+python-dotenv>=1.0.0
+
+# Utilidades
+pandas>=2.0.0
