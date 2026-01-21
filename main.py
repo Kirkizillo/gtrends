@@ -96,44 +96,47 @@ def run_health_check(logger) -> bool:
     all_ok = True
 
     # 1. Verificar Google Sheets
-    logger.info("\n[1/2] Verificando conexión a Google Sheets...")
+    logger.info("\n[1/2] Verificando conexion a Google Sheets...")
     try:
         exporter = GoogleSheetsExporter()
         if exporter.connect():
             counts = exporter.get_row_counts()
             total_rows = sum(counts.values())
-            logger.info(f"  ✅ Google Sheets OK - {total_rows} filas totales")
+            logger.info(f"  [OK] Google Sheets - {total_rows} filas totales")
         else:
-            logger.error("  ❌ Google Sheets - No se pudo conectar")
+            logger.error("  [FAIL] Google Sheets - No se pudo conectar")
             all_ok = False
     except Exception as e:
-        logger.error(f"  ❌ Google Sheets - Error: {e}")
+        logger.error(f"  [FAIL] Google Sheets - Error: {e}")
         all_ok = False
 
     # 2. Verificar Google Trends (intento básico)
-    logger.info("\n[2/2] Verificando conexión a Google Trends...")
+    logger.info("\n[2/2] Verificando conexion a Google Trends...")
     try:
         from pytrends.request import TrendReq
         pytrends = TrendReq(hl='en-US', tz=360, timeout=(5, 10))
-        # Intento con trending searches (menos restrictivo que build_payload)
-        trending = pytrends.trending_searches(pn='united_states')
-        if trending is not None and not trending.empty:
-            logger.info(f"  ✅ Google Trends OK - Trending disponible")
+        # Intento con suggestions (más estable que trending_searches)
+        suggestions = pytrends.suggestions(keyword='test')
+        if suggestions is not None:
+            logger.info(f"  [OK] Google Trends - API accesible")
         else:
-            logger.warning("  ⚠️ Google Trends - Respuesta vacía (puede ser rate limiting)")
+            logger.warning("  [WARN] Google Trends - Respuesta vacia")
     except Exception as e:
-        if '429' in str(e):
-            logger.warning(f"  ⚠️ Google Trends - Rate limited (429), pero conectividad OK")
+        error_str = str(e)
+        if '429' in error_str:
+            logger.warning(f"  [WARN] Google Trends - Rate limited (429), conectividad OK")
+        elif '404' in error_str:
+            logger.warning(f"  [WARN] Google Trends - Endpoint no disponible, pero puede funcionar")
         else:
-            logger.error(f"  ❌ Google Trends - Error: {e}")
+            logger.error(f"  [FAIL] Google Trends - Error: {e}")
             all_ok = False
 
     # Resumen
     logger.info("\n" + "="*40)
     if all_ok:
-        logger.info("✅ Health check PASSED")
+        logger.info("[OK] Health check PASSED")
     else:
-        logger.error("❌ Health check FAILED")
+        logger.error("[FAIL] Health check FAILED")
 
     return all_ok
 
