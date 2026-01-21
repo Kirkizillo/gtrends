@@ -83,6 +83,6 @@ LOG_LEVEL = "INFO"
 # Configuración actual según fase
 # =============================================================================
 
-# Cambiar a TERMS_FULL y REGIONS_FULL para fases posteriores
-CURRENT_TERMS = TERMS_MVP
-CURRENT_REGIONS = REGIONS_MVP
+# Fase 2: Todos los términos y regiones
+CURRENT_TERMS = TERMS_FULL
+CURRENT_REGIONS = REGIONS_FULL

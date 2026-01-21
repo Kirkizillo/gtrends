@@ -40,8 +40,8 @@ jobs:
           echo "GOOGLE_CREDENTIALS_PATH=credentials.json" >> .env
 
       - name: Run Google Trends Monitor
-        run: python main.py
-        timeout-minutes: 15
+        run: python main.py --full
+        timeout-minutes: 60
 
       - name: Upload logs as artifact
         if: always()
