@@ -234,7 +234,15 @@ class TrendsScraper:
 
         try:
             self._build_payload(term, geo)
-            topics = self._fetch_with_retry(lambda: self.pytrends.related_topics())
+
+            # PyTrends related_topics() es inestable, capturar errores específicos
+            try:
+                topics = self._fetch_with_retry(lambda: self.pytrends.related_topics())
+            except (IndexError, KeyError) as e:
+                # Bug conocido de PyTrends con related_topics
+                logger.warning(f"PyTrends error en related_topics para '{term}': {e} (ignorando)")
+                result.success = True
+                return result
 
             if not topics or term not in topics:
                 logger.warning(f"No se encontraron topics para '{term}'")
@@ -244,40 +252,46 @@ class TrendsScraper:
             term_data = topics[term]
 
             # Procesar Top Topics
-            if term_data.get('top') is not None and not term_data['top'].empty:
-                df_top = term_data['top']
-                for _, row in df_top.iterrows():
-                    topic_title = str(row.get('topic_title', ''))
-                    topic_mid = str(row.get('topic_mid', ''))
-                    result.data.append(TrendData(
-                        timestamp=timestamp,
-                        term=term,
-                        country_code=geo,
-                        country_name=country_name,
-                        data_type='topics_top',
-                        title=topic_title,
-                        value=str(row.get('value', '')),
-                        link=f"https://trends.google.com/trends/explore?q={quote_plus(topic_mid)}&geo={geo}" if topic_mid else ""
-                    ))
-                logger.info(f"Extraídos {len(df_top)} Top Topics para '{term}'")
+            try:
+                if term_data.get('top') is not None and hasattr(term_data['top'], 'empty') and not term_data['top'].empty:
+                    df_top = term_data['top']
+                    for _, row in df_top.iterrows():
+                        topic_title = str(row.get('topic_title', ''))
+                        topic_mid = str(row.get('topic_mid', ''))
+                        result.data.append(TrendData(
+                            timestamp=timestamp,
+                            term=term,
+                            country_code=geo,
+                            country_name=country_name,
+                            data_type='topics_top',
+                            title=topic_title,
+                            value=str(row.get('value', '')),
+                            link=f"https://trends.google.com/trends/explore?q={quote_plus(topic_mid)}&geo={geo}" if topic_mid else ""
+                        ))
+                    logger.info(f"Extraídos {len(df_top)} Top Topics para '{term}'")
+            except (IndexError, KeyError, AttributeError) as e:
+                logger.warning(f"Error procesando Top Topics para '{term}': {e}")
 
             # Procesar Rising Topics
-            if term_data.get('rising') is not None and not term_data['rising'].empty:
-                df_rising = term_data['rising']
-                for _, row in df_rising.iterrows():
-                    topic_title = str(row.get('topic_title', ''))
-                    topic_mid = str(row.get('topic_mid', ''))
-                    result.data.append(TrendData(
-                        timestamp=timestamp,
-                        term=term,
-                        country_code=geo,
-                        country_name=country_name,
-                        data_type='topics_rising',
-                        title=topic_title,
-                        value=str(row.get('value', '')),
-                        link=f"https://trends.google.com/trends/explore?q={quote_plus(topic_mid)}&geo={geo}" if topic_mid else ""
-                    ))
-                logger.info(f"Extraídos {len(df_rising)} Rising Topics para '{term}'")
+            try:
+                if term_data.get('rising') is not None and hasattr(term_data['rising'], 'empty') and not term_data['rising'].empty:
+                    df_rising = term_data['rising']
+                    for _, row in df_rising.iterrows():
+                        topic_title = str(row.get('topic_title', ''))
+                        topic_mid = str(row.get('topic_mid', ''))
+                        result.data.append(TrendData(
+                            timestamp=timestamp,
+                            term=term,
+                            country_code=geo,
+                            country_name=country_name,
+                            data_type='topics_rising',
+                            title=topic_title,
+                            value=str(row.get('value', '')),
+                            link=f"https://trends.google.com/trends/explore?q={quote_plus(topic_mid)}&geo={geo}" if topic_mid else ""
+                        ))
+                    logger.info(f"Extraídos {len(df_rising)} Rising Topics para '{term}'")
+            except (IndexError, KeyError, AttributeError) as e:
+                logger.warning(f"Error procesando Rising Topics para '{term}': {e}")
 
             result.success = True
 
