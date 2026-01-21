@@ -109,22 +109,32 @@ def run_test_scraper(logger):
             logger.info(f"  [{item.data_type}] {item.title}: {item.value}")
 
 
-def run_monitor(logger, include_topics: bool = False):
+def run_monitor(logger, include_topics: bool = False, group: str = None):
     """
     Ejecuta el ciclo completo de monitoreo.
 
     Args:
         include_topics: Si incluir Related Topics (Fase 2+)
+        group: Grupo de países a ejecutar (group_1, group_2, group_3) o None para todos
     """
     mode = "COMPLETO" if include_topics else "MVP (solo queries)"
-    logger.info(f"=== Iniciando monitoreo de Google Trends ({mode}) ===")
+
+    # Filtrar regiones por grupo si se especifica
+    if group and hasattr(config, 'COUNTRY_GROUPS') and group in config.COUNTRY_GROUPS:
+        country_codes = config.COUNTRY_GROUPS[group]
+        regions = {k: v for k, v in config.CURRENT_REGIONS.items() if k in country_codes}
+        logger.info(f"=== Monitoreo de Google Trends ({mode}) - {group} ===")
+    else:
+        regions = config.CURRENT_REGIONS
+        logger.info(f"=== Iniciando monitoreo de Google Trends ({mode}) ===")
+
     logger.info(f"Términos: {config.CURRENT_TERMS}")
-    logger.info(f"Regiones: {list(config.CURRENT_REGIONS.keys())}")
+    logger.info(f"Regiones: {list(regions.keys())}")
 
     # Fase 1: Scraping
     logger.info("\n[1/2] Extrayendo datos de Google Trends...")
     scraper = TrendsScraper()
-    data = scraper.scrape_all(include_topics=include_topics)
+    data = scraper.scrape_all(regions=regions, include_topics=include_topics)
 
     if not data:
         logger.warning("No se extrajeron datos. Finalizando.")
@@ -177,6 +187,12 @@ def main():
         action='store_true',
         help='Probar scraper sin exportar a Sheets'
     )
+    parser.add_argument(
+        '--group',
+        type=str,
+        choices=['group_1', 'group_2', 'group_3'],
+        help='Ejecutar solo un grupo de países (para distribución)'
+    )
 
     args = parser.parse_args()
 
@@ -200,7 +216,7 @@ def main():
     if args.setup:
         run_setup(logger)
     else:
-        run_monitor(logger, include_topics=args.full)
+        run_monitor(logger, include_topics=args.full, group=args.group)
 
 
 if __name__ == "__main__":

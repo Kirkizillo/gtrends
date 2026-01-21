@@ -1,15 +1,51 @@
 name: Google Trends Monitor
 
 on:
-  # Ejecutar cada 4 horas
+  # Grupo 1 (IN, US, BR): 00:00 y 12:00 UTC
   schedule:
-    - cron: '0 */4 * * *'
+    - cron: '0 0,12 * * *'
+    - cron: '0 4,16 * * *'
+    - cron: '0 8,20 * * *'
 
   # Permitir ejecución manual desde GitHub
   workflow_dispatch:
+    inputs:
+      group:
+        description: 'Country group to run (leave empty for all)'
+        required: false
+        default: ''
+        type: choice
+        options:
+          - ''
+          - 'group_1'
+          - 'group_2'
+          - 'group_3'
 
 jobs:
+  # Determinar qué grupo ejecutar basado en la hora
+  determine-group:
+    runs-on: ubuntu-latest
+    outputs:
+      group: ${{ steps.set-group.outputs.group }}
+    steps:
+      - name: Determine group from schedule
+        id: set-group
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "group=${{ github.event.inputs.group }}" >> $GITHUB_OUTPUT
+          else
+            HOUR=$(date -u +%H)
+            if [ "$HOUR" == "00" ] || [ "$HOUR" == "12" ]; then
+              echo "group=group_1" >> $GITHUB_OUTPUT
+            elif [ "$HOUR" == "04" ] || [ "$HOUR" == "16" ]; then
+              echo "group=group_2" >> $GITHUB_OUTPUT
+            else
+              echo "group=group_3" >> $GITHUB_OUTPUT
+            fi
+          fi
+
   scrape-and-export:
+    needs: determine-group
     runs-on: ubuntu-latest
 
     steps:
@@ -35,18 +71,26 @@ jobs:
       - name: Create .env file
         env:
           GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
+          PROXIES: ${{ secrets.PROXIES }}
         run: |
           echo "GOOGLE_SHEET_ID=$GOOGLE_SHEET_ID" > .env
           echo "GOOGLE_CREDENTIALS_PATH=credentials.json" >> .env
+          echo "PROXIES=$PROXIES" >> .env
 
       - name: Run Google Trends Monitor
-        run: python main.py --full
-        timeout-minutes: 60
+        run: |
+          GROUP="${{ needs.determine-group.outputs.group }}"
+          if [ -n "$GROUP" ]; then
+            python main.py --full --group $GROUP
+          else
+            python main.py --full
+          fi
+        timeout-minutes: 30
 
       - name: Upload logs as artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: logs-${{ github.run_number }}
+          name: logs-${{ github.run_number }}-${{ needs.determine-group.outputs.group || 'all' }}
           path: logs/
           retention-days: 7

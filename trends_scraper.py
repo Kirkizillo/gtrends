@@ -43,25 +43,44 @@ class TrendsScraper:
     def __init__(self):
         self.rate_limiter = RateLimiter(config.RATE_LIMIT_SECONDS)
         self.pytrends = None
+        self.proxies = config.PROXIES if hasattr(config, 'PROXIES') else []
+        self.current_proxy_index = 0
         self._init_pytrends()
+
+    def _get_next_proxy(self):
+        """Obtiene el siguiente proxy de la lista rotativa."""
+        if not self.proxies:
+            return None
+        proxy = self.proxies[self.current_proxy_index]
+        self.current_proxy_index = (self.current_proxy_index + 1) % len(self.proxies)
+        return proxy
 
     def _init_pytrends(self):
         """Inicializa la conexión con Google Trends."""
         try:
-            # Nota: No usamos retries/backoff_factor aquí porque causan
-            # incompatibilidad con urllib3 2.x. Manejamos reintentos manualmente.
-            # Usamos requests_args con headers de navegador para evitar bloqueos 429
+            # Configurar requests_args con headers de navegador
+            requests_args = {
+                'headers': {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'Accept': 'application/json, text/plain, */*',
+                    'Accept-Language': 'en-US,en;q=0.9',
+                }
+            }
+
+            # Agregar proxy si está disponible
+            proxy = self._get_next_proxy()
+            if proxy:
+                requests_args['proxies'] = {
+                    'http': proxy,
+                    'https': proxy
+                }
+                logger.info(f"Usando proxy: {proxy[:30]}...")
+
             self.pytrends = TrendReq(
                 hl='en-US',
                 tz=360,
                 timeout=(10, 25),
-                requests_args={
-                    'headers': {
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                        'Accept': 'application/json, text/plain, */*',
-                        'Accept-Language': 'en-US,en;q=0.9',
-                    }
-                }
+                requests_args=requests_args
             )
             logger.info("PyTrends inicializado correctamente")
         except Exception as e:

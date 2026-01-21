@@ -57,6 +57,19 @@ RATE_LIMIT_SECONDS = 90
 MAX_RETRIES = 3
 RETRY_DELAY_SECONDS = 30
 
+# Proxies rotativos (opcional)
+# Formato: ["http://ip:port", "http://user:pass@ip:port", ...]
+# Dejar vacío para no usar proxies
+PROXIES = os.getenv("PROXIES", "").split(",") if os.getenv("PROXIES") else []
+
+# Distribución de requests
+# Divide los países en grupos para ejecutar en diferentes horarios
+COUNTRY_GROUPS = {
+    "group_1": ["IN", "US", "BR"],      # Horario: 00:00, 12:00
+    "group_2": ["ID", "MX", "GB"],      # Horario: 04:00, 16:00
+    "group_3": ["AU", "VN", "DE", "RU"] # Horario: 08:00, 20:00
+}
+
 # =============================================================================
 # Configuración de Google Sheets
 # =============================================================================
