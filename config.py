@@ -35,7 +35,12 @@ REGIONS_FULL = {
     "US": "United States",
     "BR": "Brazil",
     "ID": "Indonesia",
-    "MX": "Mexico"
+    "MX": "Mexico",
+    "GB": "United Kingdom",
+    "AU": "Australia",
+    "VN": "Vietnam",
+    "DE": "Germany",
+    "RU": "Russia"
 }
 
 # =============================================================================
