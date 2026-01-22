@@ -64,10 +64,11 @@ PROXIES = os.getenv("PROXIES", "").split(",") if os.getenv("PROXIES") else []
 
 # Distribución de requests
 # Divide los países en grupos para ejecutar en diferentes horarios
+# 10 países / 3 grupos = 3-4 países por grupo, redistribuidos para equilibrar
 COUNTRY_GROUPS = {
-    "group_1": ["IN", "US", "BR"],      # Horario: 00:00, 12:00
-    "group_2": ["ID", "MX", "GB"],      # Horario: 04:00, 16:00
-    "group_3": ["AU", "VN", "DE", "RU"] # Horario: 08:00, 20:00
+    "group_1": ["IN", "US", "BR", "RU"],  # Horario: 00:00, 12:00 (mercados grandes)
+    "group_2": ["ID", "MX", "GB"],        # Horario: 04:00, 16:00
+    "group_3": ["AU", "VN", "DE"]         # Horario: 08:00, 20:00
 }
 
 # =============================================================================
