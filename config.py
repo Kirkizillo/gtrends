@@ -107,8 +107,7 @@ LOG_LEVEL = "INFO"
 TERMS_REDUCED = [
     "apk",
     "download apk",
-    "app download",
-    "apk games"
+    "app download"
 ]
 
 CURRENT_TERMS = TERMS_REDUCED
