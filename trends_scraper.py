@@ -2,6 +2,7 @@
 Scraper de Google Trends usando PyTrends.
 """
 import logging
+import random
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 from dataclasses import dataclass, field
@@ -13,6 +14,47 @@ import config
 from rate_limiter import RateLimiter, retry_with_backoff
 
 logger = logging.getLogger(__name__)
+
+# Lista de User-Agents para rotación
+USER_AGENTS = [
+    # Chrome on Windows
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 11.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+
+    # Firefox on Windows
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0',
+
+    # Chrome on macOS
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+
+    # Safari on macOS
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15',
+
+    # Firefox on macOS
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:121.0) Gecko/20100101 Firefox/121.0',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 13.6; rv:120.0) Gecko/20100101 Firefox/120.0',
+
+    # Chrome on Linux
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (X11; Ubuntu; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+
+    # Firefox on Linux
+    'Mozilla/5.0 (X11; Linux x86_64; rv:121.0) Gecko/20100101 Firefox/121.0',
+    'Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:120.0) Gecko/20100101 Firefox/120.0',
+
+    # Edge on Windows
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36 Edg/119.0.0.0',
+
+    # Edge on macOS
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0',
+]
 
 
 @dataclass
@@ -59,12 +101,20 @@ class TrendsScraper:
     def _init_pytrends(self):
         """Inicializa la conexión con Google Trends."""
         try:
+            # Seleccionar un User-Agent aleatorio
+            user_agent = random.choice(USER_AGENTS)
+            logger.info(f"Usando User-Agent: {user_agent[:60]}...")
+
             # Configurar requests_args con headers de navegador
             requests_args = {
                 'headers': {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'User-Agent': user_agent,
                     'Accept': 'application/json, text/plain, */*',
                     'Accept-Language': 'en-US,en;q=0.9',
+                    'Accept-Encoding': 'gzip, deflate, br',
+                    'DNT': '1',
+                    'Connection': 'keep-alive',
+                    'Upgrade-Insecure-Requests': '1',
                 }
             }
 
@@ -119,7 +169,6 @@ class TrendsScraper:
             Resultado de la función
         """
         import time
-        import random
 
         for attempt in range(max_retries):
             try:
@@ -127,8 +176,9 @@ class TrendsScraper:
             except Exception as e:
                 if '429' in str(e):
                     if attempt < max_retries - 1:
-                        # Espera exponencial con jitter aleatorio
-                        wait_time = (60 * (2 ** attempt)) + random.randint(10, 30)
+                        # Espera exponencial con jitter aleatorio (mucho más agresiva)
+                        # Intento 1: 120-180s, Intento 2: 240-300s, Intento 3: 480-540s
+                        wait_time = (120 * (2 ** attempt)) + random.randint(20, 60)
                         logger.warning(
                             f"Rate limit 429. Intento {attempt + 1}/{max_retries}. "
                             f"Esperando {wait_time}s..."

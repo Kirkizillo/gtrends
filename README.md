@@ -156,6 +156,35 @@ python main.py
 python main.py --full
 ```
 
+## Workflow de Desarrollo
+
+**⚠️ IMPORTANTE: Siempre hacer push a GitHub después de probar localmente**
+
+Cuando hagas cambios al código del scraper:
+
+1. **Hacer cambios localmente** en la carpeta `trends_monitor/`
+
+2. **Probar con mock scraper** para verificar la lógica sin usar la API de Google:
+   ```bash
+   python test_mock_scraper.py   # Verifica lógica de extracción
+   python test_user_agents.py    # Verifica rotación de user-agents
+   ```
+
+3. **SIEMPRE hacer commit y push** después de que los tests mock pasen:
+   ```bash
+   git add .
+   git commit -m "Descripción de los cambios"
+   git push origin main
+   ```
+
+4. GitHub Actions ejecutará automáticamente con el nuevo código
+
+**Por qué es importante:**
+- GitHub Actions ejecuta el scraping real según el horario configurado
+- Los cambios locales NO se usan en GitHub Actions hasta que hagas push
+- Los tests mock prueban la lógica sin gastar cuota de la API
+- Mantener local y GitHub sincronizados evita confusiones y errores
+
 ## Fases de Desarrollo
 
 ### Fase 1 (MVP) - Actual

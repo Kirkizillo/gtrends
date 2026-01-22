@@ -207,6 +207,7 @@ def run_monitor(logger, include_topics: bool = False, include_interest: bool = F
     total_scraped = 0
     total_exported = 0
     export_counts = {}
+    failed_combinations = []  # Tracking failed term/region combinations
 
     total_combinations = len(terms) * len(regions)
     current = 0
@@ -222,6 +223,7 @@ def run_monitor(logger, include_topics: bool = False, include_interest: bool = F
             logger.info(f"\n[{current}/{total_combinations}] Procesando '{term}' en {country_name} ({geo})")
 
             batch_data = []
+            combination_failed = False  # Track if this combination failed
 
             # Extraer Related Queries
             queries_result = scraper.scrape_related_queries(term, geo, country_name)
@@ -230,6 +232,7 @@ def run_monitor(logger, include_topics: bool = False, include_interest: bool = F
                 logger.info(f"  Queries: {len(queries_result.data)} registros")
             else:
                 logger.error(f"  Queries fallido: {queries_result.error_message}")
+                failed_combinations.append({"term": term, "region": geo, "country": country_name, "type": "queries"})
 
             # Extraer Related Topics (si está habilitado)
             if include_topics:
@@ -239,6 +242,7 @@ def run_monitor(logger, include_topics: bool = False, include_interest: bool = F
                     logger.info(f"  Topics: {len(topics_result.data)} registros")
                 else:
                     logger.error(f"  Topics fallido: {topics_result.error_message}")
+                    failed_combinations.append({"term": term, "region": geo, "country": country_name, "type": "topics"})
 
             # Extraer Interest Over Time (si está habilitado)
             if include_interest:
@@ -248,6 +252,7 @@ def run_monitor(logger, include_topics: bool = False, include_interest: bool = F
                     logger.info(f"  Interest: {len(interest_result.data)} registros")
                 else:
                     logger.error(f"  Interest fallido: {interest_result.error_message}")
+                    failed_combinations.append({"term": term, "region": geo, "country": country_name, "type": "interest"})
 
             # Exportar inmediatamente este lote
             if batch_data:
@@ -279,7 +284,28 @@ def run_monitor(logger, include_topics: bool = False, include_interest: bool = F
         for sheet, count in export_counts.items():
             logger.info(f"  {sheet}: {count} filas")
 
-    logger.info("\n=== Monitoreo completado exitosamente ===")
+    # Mostrar combinaciones fallidas para análisis
+    if failed_combinations:
+        logger.warning(f"\n⚠️  {len(failed_combinations)} extracciones fallaron:")
+        # Agrupar por combinación term/region para mejor visualización
+        by_combination = {}
+        for failure in failed_combinations:
+            key = f"{failure['term']} - {failure['region']} ({failure['country']})"
+            if key not in by_combination:
+                by_combination[key] = []
+            by_combination[key].append(failure['type'])
+
+        for combination, types in sorted(by_combination.items()):
+            logger.warning(f"  • {combination}: {', '.join(types)}")
+
+        logger.warning("\n💡 Próximos pasos:")
+        logger.warning("  1. Estas combinaciones experimentan rate limiting frecuente")
+        logger.warning("  2. Considera aumentar RATE_LIMIT_SECONDS aún más")
+        logger.warning("  3. O distribuir estas combinaciones en ejecuciones separadas")
+    else:
+        logger.info("\n✓ Todas las extracciones completadas exitosamente")
+
+    logger.info("\n=== Monitoreo completado ===")
 
 
 def main():

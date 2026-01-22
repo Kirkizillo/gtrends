@@ -19,11 +19,16 @@ class RateLimiter:
 
     def wait(self):
         """Espera el tiempo necesario antes de la siguiente llamada."""
+        import random
+
         current_time = time.time()
         time_since_last_call = current_time - self.last_call_time
 
         if time_since_last_call < self.seconds_between_calls:
             wait_time = self.seconds_between_calls - time_since_last_call
+            # Agregar jitter aleatorio (±5%) para evitar patrones sincronizados
+            jitter = random.uniform(-0.05, 0.05) * self.seconds_between_calls
+            wait_time = max(0, wait_time + jitter)
             logger.info(f"Rate limiting: esperando {wait_time:.1f} segundos...")
             time.sleep(wait_time)
 

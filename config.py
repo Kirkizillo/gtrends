@@ -53,7 +53,7 @@ REGIONS_FULL = {
 TIMEFRAME = "now 4-H"
 
 # Rate limiting: segundos entre requests
-RATE_LIMIT_SECONDS = 90
+RATE_LIMIT_SECONDS = 200
 
 # Reintentos en caso de error
 MAX_RETRIES = 3

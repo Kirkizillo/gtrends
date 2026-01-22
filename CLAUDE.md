@@ -86,3 +86,31 @@ Google Trends aggressively rate-limits. The system handles this via:
 2. Exponential backoff on 429 errors (120s → 240s → 480s)
 3. Session re-initialization after each retry
 4. Country group distribution to reduce request density
+5. User-agent rotation (20 different browsers/OS combinations)
+6. Random jitter (±5%) on rate limit delays
+
+## Development Workflow
+
+**CRITICAL: Always push changes to GitHub after local testing**
+
+When making changes to the scraper logic:
+
+1. **Make changes locally** in the `trends_monitor/` directory
+2. **Test with mock scraper** to verify logic without hitting Google API:
+   ```bash
+   python test_mock_scraper.py  # Verifies extraction logic
+   python test_user_agents.py   # Verifies user-agent rotation
+   ```
+3. **ALWAYS commit and push** changes to GitHub after successful mock tests:
+   ```bash
+   git add .
+   git commit -m "Description of changes"
+   git push origin main
+   ```
+4. GitHub Actions will pick up the changes and run with the new code
+
+**Why this matters:**
+- GitHub Actions runs the actual scraping on schedule
+- Local changes won't be used by GitHub Actions until pushed
+- Mock tests prove the logic works without using API quota
+- Keeping local and GitHub in sync prevents confusion
