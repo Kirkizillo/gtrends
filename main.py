@@ -168,7 +168,7 @@ def run_test_scraper(logger):
 
 def run_monitor(logger, include_topics: bool = False, include_interest: bool = False, group: str = None):
     """
-    Ejecuta el ciclo completo de monitoreo.
+    Ejecuta el ciclo completo de monitoreo con exportación incremental.
 
     Args:
         include_topics: Si incluir Related Topics
@@ -191,49 +191,93 @@ def run_monitor(logger, include_topics: bool = False, include_interest: bool = F
         regions = config.CURRENT_REGIONS
         logger.info(f"=== Iniciando monitoreo de Google Trends ({mode}) ===")
 
-    logger.info(f"Términos: {config.CURRENT_TERMS}")
+    terms = config.CURRENT_TERMS
+    logger.info(f"Términos: {terms}")
     logger.info(f"Regiones: {list(regions.keys())}")
 
-    # Fase 1: Scraping
-    logger.info("\n[1/2] Extrayendo datos de Google Trends...")
+    # Inicializar scraper y exporter
     scraper = TrendsScraper()
-    data = scraper.scrape_all(regions=regions, include_topics=include_topics, include_interest=include_interest)
-
-    if not data:
-        logger.warning("No se extrajeron datos. Finalizando.")
-        return
-
-    logger.info(f"Extraídos {len(data)} registros")
-
-    # Guardar backup local
-    backup_path = save_backup(data, group)
-    if backup_path:
-        logger.info(f"Backup guardado: {backup_path}")
-
-    # Limpiar backups antiguos (más de 7 días)
-    cleanup_old_backups(keep_days=7)
-
-    # Fase 2: Exportación
-    logger.info("\n[2/2] Exportando a Google Sheets...")
     exporter = GoogleSheetsExporter()
 
-    try:
-        export_counts = exporter.export(data)
+    if not exporter.connect():
+        logger.error("No se pudo conectar a Google Sheets")
+        sys.exit(1)
 
-        logger.info("\nResumen de exportación:")
-        total_exported = 0
+    # Contadores totales
+    total_scraped = 0
+    total_exported = 0
+    export_counts = {}
+
+    total_combinations = len(terms) * len(regions)
+    current = 0
+
+    logger.info(f"\nIniciando scraping incremental: {len(terms)} términos × {len(regions)} países = {total_combinations} combinaciones")
+
+    # Limpiar backups antiguos al inicio
+    cleanup_old_backups(keep_days=7)
+
+    for term_idx, term in enumerate(terms, 1):
+        for geo, country_name in regions.items():
+            current += 1
+            logger.info(f"\n[{current}/{total_combinations}] Procesando '{term}' en {country_name} ({geo})")
+
+            batch_data = []
+
+            # Extraer Related Queries
+            queries_result = scraper.scrape_related_queries(term, geo, country_name)
+            if queries_result.success:
+                batch_data.extend(queries_result.data)
+                logger.info(f"  Queries: {len(queries_result.data)} registros")
+            else:
+                logger.error(f"  Queries fallido: {queries_result.error_message}")
+
+            # Extraer Related Topics (si está habilitado)
+            if include_topics:
+                topics_result = scraper.scrape_related_topics(term, geo, country_name)
+                if topics_result.success:
+                    batch_data.extend(topics_result.data)
+                    logger.info(f"  Topics: {len(topics_result.data)} registros")
+                else:
+                    logger.error(f"  Topics fallido: {topics_result.error_message}")
+
+            # Extraer Interest Over Time (si está habilitado)
+            if include_interest:
+                interest_result = scraper.scrape_interest_over_time(term, geo, country_name)
+                if interest_result.success:
+                    batch_data.extend(interest_result.data)
+                    logger.info(f"  Interest: {len(interest_result.data)} registros")
+                else:
+                    logger.error(f"  Interest fallido: {interest_result.error_message}")
+
+            # Exportar inmediatamente este lote
+            if batch_data:
+                total_scraped += len(batch_data)
+
+                try:
+                    batch_counts = exporter.export(batch_data)
+                    for sheet, count in batch_counts.items():
+                        export_counts[sheet] = export_counts.get(sheet, 0) + count
+                        total_exported += count
+                    logger.info(f"  Exportado: {sum(batch_counts.values())} filas a Sheets")
+
+                    # Guardar backup incremental
+                    save_backup(batch_data, f"{group}_{term}_{geo}" if group else f"{term}_{geo}")
+
+                except Exception as e:
+                    logger.error(f"  Error exportando: {e}")
+                    # Guardar backup de emergencia
+                    save_backup(batch_data, f"emergency_{term}_{geo}")
+
+    # Resumen final
+    logger.info(f"\n{'='*50}")
+    logger.info("RESUMEN FINAL")
+    logger.info(f"{'='*50}")
+    logger.info(f"Total scrapeado: {total_scraped} registros")
+    logger.info(f"Total exportado: {total_exported} filas")
+    if export_counts:
+        logger.info("Por hoja:")
         for sheet, count in export_counts.items():
             logger.info(f"  {sheet}: {count} filas")
-            total_exported += count
-
-        logger.info(f"\nTotal exportado: {total_exported} filas")
-
-    except ConnectionError as e:
-        logger.error(f"Error de conexión: {e}")
-        sys.exit(1)
-    except Exception as e:
-        logger.error(f"Error durante exportación: {e}")
-        sys.exit(1)
 
     logger.info("\n=== Monitoreo completado exitosamente ===")
 

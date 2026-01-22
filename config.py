@@ -102,6 +102,14 @@ LOG_LEVEL = "INFO"
 # Configuración actual según fase
 # =============================================================================
 
-# Fase 2: Todos los términos y regiones
-CURRENT_TERMS = TERMS_FULL
+# Términos reducidos para caber en el timeout de GitHub Actions
+# Con 4 términos × 3 países × 2 llamadas × 90s = ~36 min
+TERMS_REDUCED = [
+    "apk",
+    "download apk",
+    "app download",
+    "apk games"
+]
+
+CURRENT_TERMS = TERMS_REDUCED
 CURRENT_REGIONS = REGIONS_FULL
