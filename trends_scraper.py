@@ -105,12 +105,14 @@ class TrendsScraper:
         """Retorna timestamp actual en formato ISO (UTC)."""
         return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
-    def _fetch_with_retry(self, fetch_func, max_retries: int = 3):
+    def _fetch_with_retry(self, fetch_func, term: str = None, geo: str = None, max_retries: int = 3):
         """
         Ejecuta una función de fetch con reintentos para errores 429.
 
         Args:
             fetch_func: Función a ejecutar
+            term: Término de búsqueda (para reconstruir payload tras reinicio)
+            geo: Código de país (para reconstruir payload tras reinicio)
             max_retries: Número máximo de reintentos
 
         Returns:
@@ -134,6 +136,14 @@ class TrendsScraper:
                         time.sleep(wait_time)
                         # Reinicializar pytrends con nueva sesión
                         self._init_pytrends()
+                        # Reconstruir el payload después de reiniciar
+                        if term is not None:
+                            pytrends_geo = "" if geo == "WW" else geo
+                            self.pytrends.build_payload(
+                                kw_list=[term],
+                                timeframe=config.TIMEFRAME,
+                                geo=pytrends_geo
+                            )
                     else:
                         raise
                 else:
@@ -161,7 +171,7 @@ class TrendsScraper:
 
         try:
             self._build_payload(term, geo)
-            queries = self._fetch_with_retry(lambda: self.pytrends.related_queries())
+            queries = self._fetch_with_retry(lambda: self.pytrends.related_queries(), term=term, geo=geo)
 
             if not queries or term not in queries:
                 logger.warning(f"No se encontraron queries para '{term}'")
@@ -239,7 +249,7 @@ class TrendsScraper:
 
             # PyTrends related_topics() es inestable, capturar errores específicos
             try:
-                topics = self._fetch_with_retry(lambda: self.pytrends.related_topics())
+                topics = self._fetch_with_retry(lambda: self.pytrends.related_topics(), term=term, geo=geo)
             except (IndexError, KeyError) as e:
                 # Bug conocido de PyTrends con related_topics
                 logger.warning(f"PyTrends error en related_topics para '{term}': {e} (ignorando)")
@@ -325,7 +335,7 @@ class TrendsScraper:
 
         try:
             self._build_payload(term, geo)
-            interest_df = self._fetch_with_retry(lambda: self.pytrends.interest_over_time())
+            interest_df = self._fetch_with_retry(lambda: self.pytrends.interest_over_time(), term=term, geo=geo)
 
             if interest_df is None or interest_df.empty:
                 logger.warning(f"No se encontró interest over time para '{term}'")
