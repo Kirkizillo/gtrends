@@ -92,11 +92,13 @@ class TrendsScraper:
     def _build_payload(self, term: str, geo: str):
         """Construye el payload para una búsqueda."""
         self.rate_limiter.wait()
-        logger.info(f"Construyendo payload para '{term}' en {geo}")
+        # WW (Worldwide) usa geo vacío en PyTrends
+        pytrends_geo = "" if geo == "WW" else geo
+        logger.info(f"Construyendo payload para '{term}' en {geo or 'Worldwide'}")
         self.pytrends.build_payload(
             kw_list=[term],
             timeframe=config.TIMEFRAME,
-            geo=geo
+            geo=pytrends_geo
         )
 
     def _get_timestamp(self) -> str:
