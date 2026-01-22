@@ -47,8 +47,8 @@ REGIONS_FULL = {
 # Configuración de Google Trends
 # =============================================================================
 
-# Timeframe: últimas 24 horas
-TIMEFRAME = "now 1-d"
+# Timeframe: últimas 4 horas
+TIMEFRAME = "now 4-H"
 
 # Rate limiting: segundos entre requests
 RATE_LIMIT_SECONDS = 90

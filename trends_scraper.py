@@ -181,7 +181,7 @@ class TrendsScraper:
                         data_type='queries_top',
                         title=query_text,
                         value=str(row.get('value', '')),
-                        link=f"https://trends.google.com/trends/explore?q={quote_plus(query_text)}&geo={geo}"
+                        link=f"https://trends.google.com/trends/explore?q={quote_plus(query_text)}&geo={geo}&date={quote_plus(config.TIMEFRAME)}"
                     ))
                 logger.info(f"Extraídos {len(df_top)} Top Queries para '{term}'")
 
@@ -198,7 +198,7 @@ class TrendsScraper:
                         data_type='queries_rising',
                         title=query_text,
                         value=str(row.get('value', '')),
-                        link=f"https://trends.google.com/trends/explore?q={quote_plus(query_text)}&geo={geo}"
+                        link=f"https://trends.google.com/trends/explore?q={quote_plus(query_text)}&geo={geo}&date={quote_plus(config.TIMEFRAME)}"
                     ))
                 logger.info(f"Extraídos {len(df_rising)} Rising Queries para '{term}'")
 
@@ -266,7 +266,7 @@ class TrendsScraper:
                             data_type='topics_top',
                             title=topic_title,
                             value=str(row.get('value', '')),
-                            link=f"https://trends.google.com/trends/explore?q={quote_plus(topic_mid)}&geo={geo}" if topic_mid else ""
+                            link=f"https://trends.google.com/trends/explore?q={quote_plus(topic_mid)}&geo={geo}&date={quote_plus(config.TIMEFRAME)}" if topic_mid else ""
                         ))
                     logger.info(f"Extraídos {len(df_top)} Top Topics para '{term}'")
             except (IndexError, KeyError, AttributeError) as e:
@@ -287,7 +287,7 @@ class TrendsScraper:
                             data_type='topics_rising',
                             title=topic_title,
                             value=str(row.get('value', '')),
-                            link=f"https://trends.google.com/trends/explore?q={quote_plus(topic_mid)}&geo={geo}" if topic_mid else ""
+                            link=f"https://trends.google.com/trends/explore?q={quote_plus(topic_mid)}&geo={geo}&date={quote_plus(config.TIMEFRAME)}" if topic_mid else ""
                         ))
                     logger.info(f"Extraídos {len(df_rising)} Rising Topics para '{term}'")
             except (IndexError, KeyError, AttributeError) as e:
@@ -342,7 +342,7 @@ class TrendsScraper:
                         data_type='interest_over_time',
                         title=time_point,  # Usamos title para el punto temporal
                         value=str(row[term]),
-                        link=f"https://trends.google.com/trends/explore?q={quote_plus(term)}&geo={geo}"
+                        link=f"https://trends.google.com/trends/explore?q={quote_plus(term)}&geo={geo}&date={quote_plus(config.TIMEFRAME)}"
                     ))
                 logger.info(f"Extraídos {len(interest_df)} puntos de Interest Over Time para '{term}'")
 
