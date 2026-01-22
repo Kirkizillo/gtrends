@@ -86,11 +86,11 @@ jobs:
         run: |
           GROUP="${{ needs.determine-group.outputs.group }}"
           if [ -n "$GROUP" ]; then
-            python main.py --interest --group $GROUP
+            python main.py --group $GROUP
           else
-            python main.py --interest
+            python main.py
           fi
-        timeout-minutes: 45
+        timeout-minutes: 30
 
       - name: Upload logs as artifact
         if: always()
