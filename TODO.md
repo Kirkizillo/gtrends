@@ -7,6 +7,7 @@
 - [ ] Comparar con datos anteriores (antes del 2026-01-29)
 - [ ] Verificar si group_3 (08:10, 20:10 UTC) presenta problemas
 - [ ] Ajustar horarios si es necesario
+- [ ] Evaluar implementar "Skip términos baja prioridad" si tasa de 429 sigue alta
 
 **Contexto:** El 2026-01-29 se cambiaron los horarios para evitar 12:00 y 16:00 UTC (66% tasa de fallo):
 - group_1: 00:00, 12:00 → 00:00, 14:00
