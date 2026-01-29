@@ -1,11 +1,11 @@
 name: Google Trends Monitor
 
 on:
-  # Grupo 1 (IN, US, BR): 00:00 y 12:00 UTC
+  # Grupos escalonados para evitar colisiones
   schedule:
-    - cron: '0 0,12 * * *'
-    - cron: '0 4,16 * * *'
-    - cron: '0 8,20 * * *'
+    - cron: '0 0,12 * * *'   # group_1: WW, IN, US, BR
+    - cron: '5 4,16 * * *'   # group_2: ID, MX, PH, GB (+5 min offset)
+    - cron: '10 8,20 * * *'  # group_3: AU, VN, DE, RU (+10 min offset)
 
   # Permitir ejecución manual desde GitHub
   workflow_dispatch:
@@ -90,7 +90,7 @@ jobs:
           else
             python main.py
           fi
-        timeout-minutes: 60
+        timeout-minutes: 90
 
       - name: Upload logs as artifact
         if: always()

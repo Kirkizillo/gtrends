@@ -8,6 +8,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 
 import config
+from datetime import datetime
 from trends_scraper import TrendData
 
 logger = logging.getLogger(__name__)
@@ -216,6 +217,51 @@ class GoogleSheetsExporter:
                 counts[sheet_name] = 0
 
         return counts
+
+    def export_report_to_sheet(self, headers: List[str], rows: List[List[str]],
+                                timestamp: datetime = None) -> Optional[str]:
+        """
+        Exporta un informe a una pestaña individual con formato de fecha legible.
+
+        Args:
+            headers: Lista de headers para la pestaña
+            rows: Lista de filas de datos
+            timestamp: Timestamp para el nombre (default: ahora)
+
+        Returns:
+            Nombre de la pestaña creada o None si hay error
+        """
+        if not self.spreadsheet:
+            if not self.connect():
+                raise ConnectionError("No se pudo conectar a Google Sheets")
+
+        if timestamp is None:
+            timestamp = datetime.now()
+
+        # Formato legible: Inf_2026-01-29_12:54
+        sheet_name = timestamp.strftime("Inf_%Y-%m-%d_%H:%M")
+
+        try:
+            # Crear pestaña nueva
+            worksheet = self.spreadsheet.add_worksheet(
+                title=sheet_name,
+                rows=max(len(rows) + 10, 100),
+                cols=len(headers)
+            )
+
+            # Agregar headers
+            worksheet.append_row(headers)
+
+            # Agregar datos
+            if rows:
+                worksheet.append_rows(rows, value_input_option='RAW')
+
+            logger.info(f"Informe exportado a pestaña '{sheet_name}' ({len(rows)} filas)")
+            return sheet_name
+
+        except Exception as e:
+            logger.error(f"Error creando pestaña de informe: {e}")
+            return None
 
 
 # Para pruebas directas

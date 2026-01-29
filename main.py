@@ -17,6 +17,7 @@ import config
 from trends_scraper import TrendsScraper
 from google_sheets_exporter import GoogleSheetsExporter
 from backup import save_backup, cleanup_old_backups
+from report_generator import ReportGenerator, REPORT_SHEET_HEADERS
 
 
 def setup_logging():
@@ -44,24 +45,61 @@ def setup_logging():
 
 def validate_config(logger) -> bool:
     """
-    Valida que la configuración necesaria esté presente.
+    Valida que la configuración necesaria esté presente y sea válida.
+    Fail fast: detecta errores antes de gastar tiempo/cuota en scraping.
 
     Returns:
         True si la configuración es válida
     """
     errors = []
+    warnings = []
+
+    # === Validaciones críticas (bloquean ejecución) ===
 
     if not config.GOOGLE_SHEET_ID:
         errors.append("GOOGLE_SHEET_ID no está configurado en .env")
+    elif len(config.GOOGLE_SHEET_ID) < 20:
+        errors.append(f"GOOGLE_SHEET_ID parece inválido (muy corto): {config.GOOGLE_SHEET_ID[:10]}...")
 
     if not os.path.exists(config.GOOGLE_CREDENTIALS_PATH):
         errors.append(f"Archivo de credenciales no encontrado: {config.GOOGLE_CREDENTIALS_PATH}")
 
+    # === Validaciones de configuración de scraping ===
+
+    if config.RATE_LIMIT_SECONDS <= 0:
+        errors.append(f"RATE_LIMIT_SECONDS debe ser positivo, actual: {config.RATE_LIMIT_SECONDS}")
+    elif config.RATE_LIMIT_SECONDS < 60:
+        warnings.append(f"RATE_LIMIT_SECONDS={config.RATE_LIMIT_SECONDS}s es muy bajo, riesgo de 429")
+
+    if not config.CURRENT_TERMS:
+        errors.append("CURRENT_TERMS está vacío, no hay términos para monitorear")
+
+    if not config.CURRENT_REGIONS:
+        errors.append("CURRENT_REGIONS está vacío, no hay regiones para monitorear")
+
+    # === Validaciones de grupos de países ===
+
+    if hasattr(config, 'COUNTRY_GROUPS'):
+        all_group_countries = set()
+        for group_name, countries in config.COUNTRY_GROUPS.items():
+            all_group_countries.update(countries)
+
+        missing_in_groups = set(config.CURRENT_REGIONS.keys()) - all_group_countries
+        if missing_in_groups:
+            warnings.append(f"Países en CURRENT_REGIONS pero no en COUNTRY_GROUPS: {missing_in_groups}")
+
+    # === Mostrar resultados ===
+
+    for warning in warnings:
+        logger.warning(f"⚠️  {warning}")
+
     if errors:
+        logger.error("❌ Errores de configuración encontrados:")
         for error in errors:
-            logger.error(error)
+            logger.error(f"   • {error}")
         return False
 
+    logger.info("✓ Configuración validada correctamente")
     return True
 
 
@@ -208,6 +246,7 @@ def run_monitor(logger, include_topics: bool = False, include_interest: bool = F
     total_exported = 0
     export_counts = {}
     failed_combinations = []  # Tracking failed term/region combinations
+    all_data = []  # Acumular todos los datos para el informe
 
     total_combinations = len(terms) * len(regions)
     current = 0
@@ -257,6 +296,7 @@ def run_monitor(logger, include_topics: bool = False, include_interest: bool = F
             # Exportar inmediatamente este lote
             if batch_data:
                 total_scraped += len(batch_data)
+                all_data.extend(batch_data)  # Acumular para informe
 
                 try:
                     batch_counts = exporter.export(batch_data)
@@ -304,6 +344,52 @@ def run_monitor(logger, include_topics: bool = False, include_interest: bool = F
         logger.warning("  3. O distribuir estas combinaciones en ejecuciones separadas")
     else:
         logger.info("\n✓ Todas las extracciones completadas exitosamente")
+
+    # Generar informe para el equipo de contenidos
+    if all_data:
+        logger.info("\n" + "="*50)
+        logger.info("INFORME PARA CONTENIDOS")
+        logger.info("="*50)
+
+        report_generator = ReportGenerator()
+        report = report_generator.generate(all_data, group=group)
+
+        # Mostrar informe en formato plain en los logs
+        logger.info("\n" + report_generator.format_plain(report))
+
+        # Guardar informe en formato Slack para uso posterior
+        slack_report = report_generator.format_slack(report)
+        report_path = os.path.join(
+            os.path.dirname(__file__),
+            config.LOG_DIR,
+            f"report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+        )
+        try:
+            with open(report_path, 'w', encoding='utf-8') as f:
+                f.write(slack_report)
+            logger.info(f"\nInforme Slack guardado en: {report_path}")
+        except Exception as e:
+            logger.warning(f"No se pudo guardar informe: {e}")
+
+        # Exportar informe a pestaña individual en Google Sheets
+        if report.potential_apps or report.watchlist_apps:
+            try:
+                sheet_rows = report_generator.format_sheet_rows(report)
+                sheet_name = exporter.export_report_to_sheet(
+                    headers=REPORT_SHEET_HEADERS,
+                    rows=sheet_rows,
+                    timestamp=datetime.now()
+                )
+                if sheet_name:
+                    logger.info(f"\n📋 Informe exportado a Google Sheets: '{sheet_name}'")
+            except Exception as e:
+                logger.warning(f"No se pudo exportar informe a Sheets: {e}")
+
+        # Resumen rápido
+        if report.potential_apps:
+            logger.info(f"\n🎯 {len(report.potential_apps)} apps/términos detectados para revisar")
+        else:
+            logger.info("\nℹ️ No se detectaron apps nuevas en esta ejecución")
 
     logger.info("\n=== Monitoreo completado ===")
 
