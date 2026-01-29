@@ -9,6 +9,11 @@
 - [ ] Ajustar horarios si es necesario
 - [ ] Evaluar implementar "Skip términos baja prioridad" si tasa de 429 sigue alta
 
+### Notificaciones (Lunes 2026-02-03)
+- [ ] Decidir canal de notificación (Slack, Email, Notion)
+- [ ] Configurar credenciales/webhook como secret en GitHub
+- [ ] Implementar notificación de éxito con resumen de métricas
+
 **Contexto:** El 2026-01-29 se cambiaron los horarios para evitar 12:00 y 16:00 UTC (66% tasa de fallo):
 - group_1: 00:00, 12:00 → 00:00, 14:00
 - group_2: 04:05, 16:05 → 04:05, 18:05
