@@ -167,20 +167,27 @@ class TrendsScraper:
         """Retorna timestamp actual en formato ISO (UTC)."""
         return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
-    def _fetch_with_retry(self, fetch_func, term: str = None, geo: str = None, max_retries: int = 3):
+    def _fetch_with_retry(self, fetch_func, term: str = None, geo: str = None, max_retries: int = None):
         """
         Ejecuta una función de fetch con reintentos para errores 429.
+        Usa backoff exponencial con límite máximo configurable.
 
         Args:
             fetch_func: Función a ejecutar
             term: Término de búsqueda (para reconstruir payload tras reinicio)
             geo: Código de país (para reconstruir payload tras reinicio)
-            max_retries: Número máximo de reintentos
+            max_retries: Número máximo de reintentos (default: config.MAX_RETRIES)
 
         Returns:
             Resultado de la función
         """
         import time
+
+        if max_retries is None:
+            max_retries = config.MAX_RETRIES
+
+        # Obtener MAX_BACKOFF de config (default 180s si no existe)
+        max_backoff = getattr(config, 'MAX_BACKOFF_SECONDS', 180)
 
         for attempt in range(max_retries):
             try:
@@ -188,12 +195,15 @@ class TrendsScraper:
             except Exception as e:
                 if '429' in str(e):
                     if attempt < max_retries - 1:
-                        # Espera exponencial con jitter aleatorio (mucho más agresiva)
-                        # Intento 1: 120-180s, Intento 2: 240-300s, Intento 3: 480-540s
-                        wait_time = (120 * (2 ** attempt)) + random.randint(20, 60)
+                        # Backoff exponencial con límite máximo
+                        # Base: 60s, luego 120s, pero nunca más de MAX_BACKOFF
+                        base_wait = 60 * (2 ** attempt)
+                        jitter = random.randint(20, 60)
+                        wait_time = min(base_wait + jitter, max_backoff)
+
                         logger.warning(
                             f"Rate limit 429. Intento {attempt + 1}/{max_retries}. "
-                            f"Esperando {wait_time}s..."
+                            f"Esperando {wait_time}s (max: {max_backoff}s)..."
                         )
                         time.sleep(wait_time)
                         # Reinicializar pytrends con nueva sesión

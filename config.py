@@ -56,8 +56,13 @@ TIMEFRAME = "now 4-H"
 RATE_LIMIT_SECONDS = 200
 
 # Reintentos en caso de error
-MAX_RETRIES = 3
+# Basado en análisis de logs: si 2 intentos fallan, el 3ro también fallará
+MAX_RETRIES = 2
 RETRY_DELAY_SECONDS = 30
+
+# Límite máximo de backoff para 429 (en segundos)
+# Basado en análisis: esperas >180s no mejoran la recuperación
+MAX_BACKOFF_SECONDS = 180
 
 # Proxies rotativos (opcional)
 # Formato: ["http://ip:port", "http://user:pass@ip:port", ...]
