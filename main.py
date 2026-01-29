@@ -8,9 +8,11 @@ Uso:
     python main.py --test-scraper   # Probar scraper sin exportar
 """
 import argparse
+import json
 import logging
 import os
 import sys
+import time
 from datetime import datetime
 
 import config
@@ -213,6 +215,8 @@ def run_monitor(logger, include_topics: bool = False, include_interest: bool = F
         include_interest: Si incluir Interest Over Time
         group: Grupo de países a ejecutar (group_1, group_2, group_3) o None para todos
     """
+    start_time = time.time()  # Para métricas de duración
+
     features = []
     if include_topics:
         features.append("Topics")
@@ -271,7 +275,10 @@ def run_monitor(logger, include_topics: bool = False, include_interest: bool = F
                 logger.info(f"  Queries: {len(queries_result.data)} registros")
             else:
                 logger.error(f"  Queries fallido: {queries_result.error_message}")
-                failed_combinations.append({"term": term, "region": geo, "country": country_name, "type": "queries"})
+                failed_combinations.append({
+                    "term": term, "region": geo, "country": country_name,
+                    "type": "queries", "error_type": queries_result.error_type
+                })
 
             # Extraer Related Topics (si está habilitado)
             if include_topics:
@@ -281,7 +288,10 @@ def run_monitor(logger, include_topics: bool = False, include_interest: bool = F
                     logger.info(f"  Topics: {len(topics_result.data)} registros")
                 else:
                     logger.error(f"  Topics fallido: {topics_result.error_message}")
-                    failed_combinations.append({"term": term, "region": geo, "country": country_name, "type": "topics"})
+                    failed_combinations.append({
+                        "term": term, "region": geo, "country": country_name,
+                        "type": "topics", "error_type": topics_result.error_type
+                    })
 
             # Extraer Interest Over Time (si está habilitado)
             if include_interest:
@@ -291,7 +301,10 @@ def run_monitor(logger, include_topics: bool = False, include_interest: bool = F
                     logger.info(f"  Interest: {len(interest_result.data)} registros")
                 else:
                     logger.error(f"  Interest fallido: {interest_result.error_message}")
-                    failed_combinations.append({"term": term, "region": geo, "country": country_name, "type": "interest"})
+                    failed_combinations.append({
+                        "term": term, "region": geo, "country": country_name,
+                        "type": "interest", "error_type": interest_result.error_type
+                    })
 
             # Exportar inmediatamente este lote
             if batch_data:
@@ -327,6 +340,27 @@ def run_monitor(logger, include_topics: bool = False, include_interest: bool = F
     # Mostrar combinaciones fallidas para análisis
     if failed_combinations:
         logger.warning(f"\n⚠️  {len(failed_combinations)} extracciones fallaron:")
+
+        # Clasificar por tipo de error
+        from trends_scraper import ErrorType
+        error_counts = {}
+        for failure in failed_combinations:
+            error_type = failure.get('error_type', ErrorType.UNKNOWN)
+            error_counts[error_type] = error_counts.get(error_type, 0) + 1
+
+        logger.warning("\n📊 Resumen por tipo de error:")
+        error_labels = {
+            ErrorType.RATE_LIMIT: "Rate Limit (429)",
+            ErrorType.NO_DATA: "Sin datos",
+            ErrorType.AUTH_ERROR: "Autenticación",
+            ErrorType.NETWORK_ERROR: "Red/Conexión",
+            ErrorType.UNKNOWN: "Otros",
+            ErrorType.NONE: "Sin clasificar"
+        }
+        for error_type, count in sorted(error_counts.items(), key=lambda x: -x[1]):
+            label = error_labels.get(error_type, error_type)
+            logger.warning(f"  • {label}: {count}")
+
         # Agrupar por combinación term/region para mejor visualización
         by_combination = {}
         for failure in failed_combinations:
@@ -335,13 +369,20 @@ def run_monitor(logger, include_topics: bool = False, include_interest: bool = F
                 by_combination[key] = []
             by_combination[key].append(failure['type'])
 
+        logger.warning("\n📋 Detalle de combinaciones fallidas:")
         for combination, types in sorted(by_combination.items()):
             logger.warning(f"  • {combination}: {', '.join(types)}")
 
+        # Consejos basados en el tipo de error predominante
         logger.warning("\n💡 Próximos pasos:")
-        logger.warning("  1. Estas combinaciones experimentan rate limiting frecuente")
-        logger.warning("  2. Considera aumentar RATE_LIMIT_SECONDS aún más")
-        logger.warning("  3. O distribuir estas combinaciones en ejecuciones separadas")
+        if error_counts.get(ErrorType.RATE_LIMIT, 0) > len(failed_combinations) / 2:
+            logger.warning("  → Mayoría son Rate Limit: Aumenta RATE_LIMIT_SECONDS o distribuye en más grupos")
+        elif error_counts.get(ErrorType.NO_DATA, 0) > len(failed_combinations) / 2:
+            logger.warning("  → Mayoría sin datos: Revisa términos/regiones (pueden no tener tráfico)")
+        elif error_counts.get(ErrorType.AUTH_ERROR, 0) > 0:
+            logger.warning("  → Errores de autenticación: Verifica credenciales/proxies")
+        else:
+            logger.warning("  → Revisa los logs para más detalles sobre los errores")
     else:
         logger.info("\n✓ Todas las extracciones completadas exitosamente")
 
@@ -390,6 +431,49 @@ def run_monitor(logger, include_topics: bool = False, include_interest: bool = F
             logger.info(f"\n🎯 {len(report.potential_apps)} apps/términos detectados para revisar")
         else:
             logger.info("\nℹ️ No se detectaron apps nuevas en esta ejecución")
+
+    # Métricas estructuradas en JSON (para monitoreo/integración)
+    duration_seconds = int(time.time() - start_time)
+
+    # Contar errores por tipo
+    from trends_scraper import ErrorType
+    error_breakdown = {}
+    for failure in failed_combinations:
+        error_type = failure.get('error_type', ErrorType.UNKNOWN)
+        error_breakdown[error_type] = error_breakdown.get(error_type, 0) + 1
+
+    metrics = {
+        "timestamp": datetime.now().isoformat(),
+        "group": group or "all",
+        "duration_seconds": duration_seconds,
+        "total_combinations": total_combinations,
+        "successful_requests": total_combinations - len(failed_combinations),
+        "failed_requests": len(failed_combinations),
+        "success_rate": round((total_combinations - len(failed_combinations)) / total_combinations * 100, 1) if total_combinations > 0 else 0,
+        "total_scraped": total_scraped,
+        "total_exported": total_exported,
+        "apps_detected": len(report.potential_apps) if all_data else 0,
+        "watchlist_detected": len(report.watchlist_apps) if all_data else 0,
+        "errors_by_type": error_breakdown,
+        "export_by_sheet": export_counts
+    }
+
+    # Log métricas como JSON
+    logger.info("\n📊 MÉTRICAS (JSON):")
+    logger.info(json.dumps(metrics, indent=2, ensure_ascii=False))
+
+    # Guardar métricas en archivo separado
+    metrics_path = os.path.join(
+        os.path.dirname(__file__),
+        config.LOG_DIR,
+        f"metrics_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    )
+    try:
+        with open(metrics_path, 'w', encoding='utf-8') as f:
+            json.dump(metrics, f, indent=2, ensure_ascii=False)
+        logger.info(f"Métricas guardadas en: {metrics_path}")
+    except Exception as e:
+        logger.warning(f"No se pudieron guardar métricas: {e}")
 
     logger.info("\n=== Monitoreo completado ===")
 

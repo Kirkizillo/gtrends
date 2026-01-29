@@ -3,6 +3,7 @@ Scraper de Google Trends usando PyTrends.
 """
 import logging
 import random
+import unicodedata
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 from dataclasses import dataclass, field
@@ -70,12 +71,23 @@ class TrendData:
     link: str = ""
 
 
+class ErrorType:
+    """Tipos de error para clasificación."""
+    NONE = "none"
+    RATE_LIMIT = "rate_limit"      # Error 429
+    NO_DATA = "no_data"            # Respuesta vacía o sin datos
+    AUTH_ERROR = "auth_error"      # Error de autenticación
+    NETWORK_ERROR = "network"      # Error de red/conexión
+    UNKNOWN = "unknown"            # Otros errores
+
+
 @dataclass
 class ScrapingResult:
     """Resultado del scraping con datos y metadatos."""
     success: bool
     data: List[TrendData] = field(default_factory=list)
     error_message: str = ""
+    error_type: str = ErrorType.NONE  # Clasificación del error
 
 
 class TrendsScraper:
@@ -268,9 +280,33 @@ class TrendsScraper:
 
         except Exception as e:
             result.error_message = str(e)
+            result.error_type = self._classify_error(e)
             logger.error(f"Error extrayendo queries para '{term}': {e}")
 
         return result
+
+    def _classify_error(self, error: Exception) -> str:
+        """
+        Clasifica un error según su tipo.
+
+        Args:
+            error: Excepción capturada
+
+        Returns:
+            Tipo de error (ErrorType)
+        """
+        error_str = str(error).lower()
+
+        if '429' in error_str or 'too many requests' in error_str:
+            return ErrorType.RATE_LIMIT
+        elif 'empty' in error_str or 'no data' in error_str or 'none' in error_str:
+            return ErrorType.NO_DATA
+        elif '401' in error_str or '403' in error_str or 'unauthorized' in error_str or 'forbidden' in error_str:
+            return ErrorType.AUTH_ERROR
+        elif 'connection' in error_str or 'timeout' in error_str or 'network' in error_str:
+            return ErrorType.NETWORK_ERROR
+        else:
+            return ErrorType.UNKNOWN
 
     def scrape_related_topics(
         self,
@@ -359,6 +395,7 @@ class TrendsScraper:
 
         except Exception as e:
             result.error_message = str(e)
+            result.error_type = self._classify_error(e)
             logger.error(f"Error extrayendo topics para '{term}': {e}")
 
         return result
@@ -412,6 +449,7 @@ class TrendsScraper:
 
         except Exception as e:
             result.error_message = str(e)
+            result.error_type = self._classify_error(e)
             logger.error(f"Error extrayendo interest over time para '{term}': {e}")
 
         return result
@@ -481,9 +519,35 @@ class TrendsScraper:
         logger.info(f"Scraping completado. Total registros: {len(deduplicated_data)} (de {len(all_data)} antes de deduplicar)")
         return deduplicated_data
 
+    def _normalize_for_dedup(self, text: str) -> str:
+        """
+        Normaliza texto para comparación en deduplicación.
+        - Lowercase
+        - Strip espacios
+        - Normalización Unicode (NFKC: compatibilidad + composición)
+        - Elimina acentos/diacríticos
+
+        Args:
+            text: Texto a normalizar
+
+        Returns:
+            Texto normalizado
+        """
+        if not text:
+            return ""
+        # Normalizar Unicode (NFKD descompone caracteres)
+        normalized = unicodedata.normalize('NFKD', text)
+        # Eliminar marcas diacríticas (acentos)
+        without_accents = ''.join(
+            c for c in normalized if not unicodedata.combining(c)
+        )
+        # Lowercase y strip
+        return without_accents.lower().strip()
+
     def _deduplicate(self, data: List[TrendData]) -> List[TrendData]:
         """
         Elimina duplicados basándose en term + country + data_type + title.
+        Usa normalización case-insensitive y Unicode-aware.
 
         Args:
             data: Lista de TrendData
@@ -495,8 +559,14 @@ class TrendsScraper:
         unique_data = []
 
         for item in data:
-            # Crear clave única
-            key = (item.term, item.country_code, item.data_type, item.title)
+            # Crear clave única normalizada
+            normalized_title = self._normalize_for_dedup(item.title)
+            key = (
+                item.term.lower().strip(),
+                item.country_code,
+                item.data_type,
+                normalized_title
+            )
 
             if key not in seen:
                 seen.add(key)
