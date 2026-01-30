@@ -260,6 +260,10 @@ class GoogleSheetsExporter:
             if rows:
                 worksheet.append_rows(rows, value_input_option='RAW')
 
+            # Mover pestaña a posición 2 (después de Related_Queries_Rising)
+            # para que los informes más recientes aparezcan primero
+            worksheet.update_index(2)
+
             logger.info(f"Informe exportado a pestaña '{sheet_name}' ({len(rows)} filas)")
             return sheet_name
 
