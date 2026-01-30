@@ -19,7 +19,7 @@ import config
 from trends_scraper import TrendsScraper
 from google_sheets_exporter import GoogleSheetsExporter
 from backup import save_backup, cleanup_old_backups
-from report_generator import ReportGenerator, REPORT_SHEET_HEADERS
+from report_generator import ReportGenerator
 
 
 def setup_logging():
@@ -412,12 +412,12 @@ def run_monitor(logger, include_topics: bool = False, include_interest: bool = F
         except Exception as e:
             logger.warning(f"No se pudo guardar informe: {e}")
 
-        # Exportar informe a pestaña individual en Google Sheets
+        # Exportar informe a pestaña individual en Google Sheets (formato rico)
         if report.potential_apps or report.watchlist_apps:
             try:
                 sheet_rows = report_generator.format_sheet_rows(report)
                 sheet_name = exporter.export_report_to_sheet(
-                    headers=REPORT_SHEET_HEADERS,
+                    headers=[],  # Headers incluidos en las filas con formato rico
                     rows=sheet_rows,
                     timestamp=datetime.now()
                 )

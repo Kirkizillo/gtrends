@@ -242,15 +242,19 @@ class GoogleSheetsExporter:
         sheet_name = timestamp.strftime("Inf_%Y-%m-%d_%H:%M")
 
         try:
+            # Determinar número de columnas (de headers o de la primera fila)
+            num_cols = len(headers) if headers else (len(rows[0]) if rows else 6)
+
             # Crear pestaña nueva
             worksheet = self.spreadsheet.add_worksheet(
                 title=sheet_name,
                 rows=max(len(rows) + 10, 100),
-                cols=len(headers)
+                cols=num_cols
             )
 
-            # Agregar headers
-            worksheet.append_row(headers)
+            # Agregar headers solo si existen
+            if headers:
+                worksheet.append_row(headers)
 
             # Agregar datos
             if rows:

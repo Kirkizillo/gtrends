@@ -726,9 +726,71 @@ class ReportGenerator:
 
         return '\n'.join(lines)
 
+    def format_sheet_rich(self, report: ContentReport) -> Tuple[List[str], List[List[str]]]:
+        """
+        Genera formato rico para exportar a Google Sheets (con secciones).
+
+        Args:
+            report: ContentReport generado
+
+        Returns:
+            Tuple de (headers, rows) con formato legible
+        """
+        rows = []
+
+        # Header del informe
+        rows.append([f"INFORME TRENDS - {report.timestamp}", "", "", "", "", ""])
+        if report.group:
+            rows.append([f"Grupo: {report.group} - Regiones: {', '.join(report.regions)}", "", "", "", "", ""])
+        else:
+            rows.append([f"Regiones: {', '.join(report.regions)}", "", "", "", "", ""])
+        rows.append(["", "", "", "", "", ""])  # Línea vacía
+
+        # Sección de apps detectadas
+        if report.potential_apps:
+            rows.append([f"🎯 APPS DETECTADAS ({len(report.potential_apps)})", "", "", "", "", ""])
+            rows.append(["App", "Tipo", "Países", "Score", "Versiones", "Link"])
+
+            for item in report.potential_apps:
+                tipo = "🔥 Rising" if item.is_rising else "📈 Top"
+                countries = ', '.join(list(set(item.countries))[:5])
+                if len(set(item.countries)) > 5:
+                    countries += "..."
+                versions = ', '.join(item.versions[:3]) if item.versions else ""
+                link = item.links[0] if item.links else ""
+
+                rows.append([item.name, tipo, countries, item.max_value, versions, link])
+
+            rows.append(["", "", "", "", "", ""])  # Línea vacía
+
+        # Sección de watchlist (apps que requieren revisión)
+        if report.watchlist_apps:
+            rows.append([f"⚠️ REQUIEREN REVISIÓN ({len(report.watchlist_apps)})", "", "", "", "", ""])
+            rows.append(["App", "Tipo", "Países", "Score", "Razón", "Link"])
+
+            for item in report.watchlist_apps:
+                tipo = "🔥 Rising" if item.is_rising else "📈 Top"
+                countries = ', '.join(list(set(item.countries))[:3])
+                link = item.links[0] if item.links else ""
+
+                rows.append([item.name, tipo, countries, item.max_value, item.review_reason, link])
+
+            rows.append(["", "", "", "", "", ""])
+
+        # Resumen
+        rows.append(["─" * 30, "", "", "", "", ""])
+        rows.append([f"Total procesado: {report.total_items_processed} items → {report.total_unique_terms} únicos", "", "", "", "", ""])
+
+        if report.generic_terms:
+            generic_names = [item.name for item in report.generic_terms[:8]]
+            rows.append([f"Genéricos filtrados ({len(report.generic_terms)}): {', '.join(generic_names)}", "", "", "", "", ""])
+
+        # No retornamos headers separados porque están incluidos en las filas
+        return [], rows
+
     def format_sheet_rows(self, report: ContentReport) -> List[List[str]]:
         """
-        Genera filas para exportar a Google Sheets.
+        Genera filas para exportar a Google Sheets (formato rico).
 
         Args:
             report: ContentReport generado
@@ -736,28 +798,12 @@ class ReportGenerator:
         Returns:
             Lista de filas para el Sheet
         """
-        rows = []
-
-        for item in report.potential_apps:
-            rows.append([
-                report.timestamp,
-                report.group or "all",
-                item.name,
-                "rising" if item.is_rising else "top",
-                ', '.join(item.countries),
-                item.max_value,
-                item.links[0] if item.links else "",
-                "pending"  # Status para el equipo de contenidos
-            ])
-
+        _, rows = self.format_sheet_rich(report)
         return rows
 
 
-# Headers para la pestaña de informes en Google Sheets
-REPORT_SHEET_HEADERS = [
-    'timestamp', 'group', 'app_name', 'trend_type',
-    'countries', 'value', 'link', 'status'
-]
+# Headers para la pestaña de informes en Google Sheets (legacy, no se usan con formato rico)
+REPORT_SHEET_HEADERS = []
 
 
 # Para pruebas directas
