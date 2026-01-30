@@ -43,20 +43,18 @@ jobs:
             # Usar rangos de horas para tolerar retrasos de GitHub Actions (hasta ~2h)
             # Crons: group_1=0,14h, group_2=4,18h, group_3=8,20h
             HOUR=$(date -u +%H)
-            if [ "$HOUR" -ge 0 ] && [ "$HOUR" -lt 3 ]; then
-              echo "group=group_1" >> $GITHUB_OUTPUT   # 00:00-02:59 UTC
-            elif [ "$HOUR" -ge 4 ] && [ "$HOUR" -lt 7 ]; then
-              echo "group=group_2" >> $GITHUB_OUTPUT   # 04:00-06:59 UTC
-            elif [ "$HOUR" -ge 8 ] && [ "$HOUR" -lt 11 ]; then
-              echo "group=group_3" >> $GITHUB_OUTPUT   # 08:00-10:59 UTC
-            elif [ "$HOUR" -ge 14 ] && [ "$HOUR" -lt 17 ]; then
-              echo "group=group_1" >> $GITHUB_OUTPUT   # 14:00-16:59 UTC
-            elif [ "$HOUR" -ge 18 ] && [ "$HOUR" -lt 21 ]; then
-              echo "group=group_2" >> $GITHUB_OUTPUT   # 18:00-20:59 UTC
-            elif [ "$HOUR" -ge 20 ] && [ "$HOUR" -lt 23 ]; then
-              echo "group=group_3" >> $GITHUB_OUTPUT   # 20:00-22:59 UTC
+            if [ "$HOUR" -ge 0 ] && [ "$HOUR" -lt 4 ]; then
+              echo "group=group_1" >> $GITHUB_OUTPUT   # 00:00-03:59 UTC (cron 0h)
+            elif [ "$HOUR" -ge 4 ] && [ "$HOUR" -lt 8 ]; then
+              echo "group=group_2" >> $GITHUB_OUTPUT   # 04:00-07:59 UTC (cron 4h)
+            elif [ "$HOUR" -ge 8 ] && [ "$HOUR" -lt 14 ]; then
+              echo "group=group_3" >> $GITHUB_OUTPUT   # 08:00-13:59 UTC (cron 8h)
+            elif [ "$HOUR" -ge 14 ] && [ "$HOUR" -lt 18 ]; then
+              echo "group=group_1" >> $GITHUB_OUTPUT   # 14:00-17:59 UTC (cron 14h)
+            elif [ "$HOUR" -ge 18 ] && [ "$HOUR" -lt 20 ]; then
+              echo "group=group_2" >> $GITHUB_OUTPUT   # 18:00-19:59 UTC (cron 18h)
             else
-              echo "group=group_3" >> $GITHUB_OUTPUT   # Fallback
+              echo "group=group_3" >> $GITHUB_OUTPUT   # 20:00-23:59 UTC (cron 20h)
             fi
           fi
 
