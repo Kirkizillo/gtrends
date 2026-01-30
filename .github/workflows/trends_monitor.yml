@@ -40,13 +40,23 @@ jobs:
           if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
             echo "group=${{ github.event.inputs.group }}" >> $GITHUB_OUTPUT
           else
+            # Usar rangos de horas para tolerar retrasos de GitHub Actions (hasta ~2h)
+            # Crons: group_1=0,14h, group_2=4,18h, group_3=8,20h
             HOUR=$(date -u +%H)
-            if [ "$HOUR" == "00" ] || [ "$HOUR" == "14" ]; then
-              echo "group=group_1" >> $GITHUB_OUTPUT
-            elif [ "$HOUR" == "04" ] || [ "$HOUR" == "18" ]; then
-              echo "group=group_2" >> $GITHUB_OUTPUT
+            if [ "$HOUR" -ge 0 ] && [ "$HOUR" -lt 3 ]; then
+              echo "group=group_1" >> $GITHUB_OUTPUT   # 00:00-02:59 UTC
+            elif [ "$HOUR" -ge 4 ] && [ "$HOUR" -lt 7 ]; then
+              echo "group=group_2" >> $GITHUB_OUTPUT   # 04:00-06:59 UTC
+            elif [ "$HOUR" -ge 8 ] && [ "$HOUR" -lt 11 ]; then
+              echo "group=group_3" >> $GITHUB_OUTPUT   # 08:00-10:59 UTC
+            elif [ "$HOUR" -ge 14 ] && [ "$HOUR" -lt 17 ]; then
+              echo "group=group_1" >> $GITHUB_OUTPUT   # 14:00-16:59 UTC
+            elif [ "$HOUR" -ge 18 ] && [ "$HOUR" -lt 21 ]; then
+              echo "group=group_2" >> $GITHUB_OUTPUT   # 18:00-20:59 UTC
+            elif [ "$HOUR" -ge 20 ] && [ "$HOUR" -lt 23 ]; then
+              echo "group=group_3" >> $GITHUB_OUTPUT   # 20:00-22:59 UTC
             else
-              echo "group=group_3" >> $GITHUB_OUTPUT
+              echo "group=group_3" >> $GITHUB_OUTPUT   # Fallback
             fi
           fi
 
