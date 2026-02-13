@@ -7,12 +7,9 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # =============================================================================
-# FASE 1 (MVP): Configuración básica
+# Términos a monitorear
 # =============================================================================
 
-# Términos a monitorear
-# Fase 1: Solo "apk"
-# Fase 2: Todos los términos
 TERMS_MVP = ["apk"]
 
 TERMS_FULL = [
@@ -25,9 +22,10 @@ TERMS_FULL = [
     "obb file download"
 ]
 
+# =============================================================================
 # Regiones a monitorear
-# Fase 1: Solo India
-# Fase 3: Múltiples países
+# =============================================================================
+
 REGIONS_MVP = {"IN": "India"}
 
 REGIONS_FULL = {
@@ -42,7 +40,15 @@ REGIONS_FULL = {
     "AU": "Australia",
     "VN": "Vietnam",
     "DE": "Germany",
-    "RU": "Russia"
+    "RU": "Russia",
+    "TH": "Thailand",
+    "FR": "France",
+    "IT": "Italy",
+    "CN": "China",
+    "JP": "Japan",
+    "TR": "Turkey",
+    "RO": "Romania",
+    "NG": "Nigeria"
 }
 
 # =============================================================================
@@ -71,11 +77,14 @@ PROXIES = os.getenv("PROXIES", "").split(",") if os.getenv("PROXIES") else []
 
 # Distribución de requests
 # Divide los países en grupos para ejecutar en diferentes horarios
-# 12 regiones / 3 grupos = 4 regiones por grupo
+# 20 regiones / 5 grupos = 4 regiones por grupo
+# Cada grupo: 3 términos × 4 regiones × 200s = 40 min (timeout 90 min)
 COUNTRY_GROUPS = {
-    "group_1": ["WW", "IN", "US", "BR"],  # Horario: 00:00, 12:00 (global + Americas)
-    "group_2": ["ID", "MX", "PH", "GB"],  # Horario: 04:00, 16:00 (SE Asia + Americas + Europe)
-    "group_3": ["AU", "VN", "DE", "RU"]   # Horario: 08:00, 20:00 (Asia-Pacific + Europe)
+    "group_1": ["WW", "IN", "US", "BR"],  # 00:00, 12:00 UTC — Global + Americas
+    "group_2": ["ID", "MX", "PH", "GB"],  # 02:25, 14:25 UTC — SE Asia + Americas + Europe
+    "group_3": ["AU", "VN", "DE", "RU"],  # 04:50, 16:50 UTC — Asia-Pacific + Europe
+    "group_4": ["TH", "FR", "IT", "CN"],  # 07:15, 19:15 UTC — Asia + Europe
+    "group_5": ["JP", "TR", "RO", "NG"]   # 09:40, 21:40 UTC — Asia + Europe + Africa
 }
 
 # =============================================================================
@@ -107,16 +116,19 @@ LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 LOG_LEVEL = "INFO"
 
 # =============================================================================
-# Configuración actual según fase
+# Configuración actual
 # =============================================================================
 
 # Términos reducidos para caber en el timeout de GitHub Actions
-# Con 4 términos × 3 países × 2 llamadas × 90s = ~36 min
+# 3 términos × 4 regiones/grupo × 200s = ~40 min por grupo (timeout 90 min)
 TERMS_REDUCED = [
     "apk",
     "download apk",
     "app download"
 ]
+
+# Próximo paso: keywords localizadas por grupo (semana del 2026-02-20)
+# Ejemplo: group_4 (TH, FR, IT, CN) podría usar ["apk", "télécharger apk", "ดาวน์โหลด apk"]
 
 CURRENT_TERMS = TERMS_REDUCED
 CURRENT_REGIONS = REGIONS_FULL

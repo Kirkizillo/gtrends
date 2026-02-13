@@ -501,7 +501,7 @@ def main():
     parser.add_argument(
         '--group',
         type=str,
-        choices=['group_1', 'group_2', 'group_3'],
+        choices=['group_1', 'group_2', 'group_3', 'group_4', 'group_5'],
         help='Ejecutar solo un grupo de países (para distribución)'
     )
     parser.add_argument(

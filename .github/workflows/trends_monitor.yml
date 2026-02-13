@@ -1,12 +1,15 @@
 name: Google Trends Monitor
 
 on:
-  # Grupos escalonados para evitar colisiones
-  # Horarios ajustados 2026-01-29: evitar 12:00 y 16:00 UTC (66% tasa de fallo)
+  # 5 grupos × 2 ejecuciones/día = 10 runs diarios
+  # Separación de ~2h25min entre runs para evitar solapamientos
+  # Cada grupo tarda ~40 min (3 términos × 4 regiones × 200s)
   schedule:
-    - cron: '0 0,14 * * *'   # group_1: WW, IN, US, BR (12:00 -> 14:00)
-    - cron: '5 4,18 * * *'   # group_2: ID, MX, PH, GB (+5 min offset, 16:00 -> 18:00)
-    - cron: '10 8,20 * * *'  # group_3: AU, VN, DE, RU (+10 min offset) - sin cambios
+    - cron: '0 0,12 * * *'    # group_1: WW, IN, US, BR
+    - cron: '25 2,14 * * *'   # group_2: ID, MX, PH, GB
+    - cron: '50 4,16 * * *'   # group_3: AU, VN, DE, RU
+    - cron: '15 7,19 * * *'   # group_4: TH, FR, IT, CN
+    - cron: '40 9,21 * * *'   # group_5: JP, TR, RO, NG
 
   # Permitir ejecución manual desde GitHub
   workflow_dispatch:
@@ -21,6 +24,8 @@ on:
           - 'group_1'
           - 'group_2'
           - 'group_3'
+          - 'group_4'
+          - 'group_5'
 
 # Permisos necesarios para crear issues
 permissions:
@@ -40,21 +45,34 @@ jobs:
           if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
             echo "group=${{ github.event.inputs.group }}" >> $GITHUB_OUTPUT
           else
-            # Usar rangos de horas para tolerar retrasos de GitHub Actions (hasta ~2h)
-            # Crons: group_1=0,14h, group_2=4,18h, group_3=8,20h
+            # Rangos de hora para tolerar retrasos de GitHub Actions
+            # 10 slots de ~2h25min distribuidos en 24h
+            # Crons: g1=0,12h  g2=2:25,14:25h  g3=4:50,16:50h  g4=7:15,19:15h  g5=9:40,21:40h
             HOUR=$(date -u +%H)
-            if [ "$HOUR" -ge 0 ] && [ "$HOUR" -lt 4 ]; then
-              echo "group=group_1" >> $GITHUB_OUTPUT   # 00:00-03:59 UTC (cron 0h)
-            elif [ "$HOUR" -ge 4 ] && [ "$HOUR" -lt 8 ]; then
-              echo "group=group_2" >> $GITHUB_OUTPUT   # 04:00-07:59 UTC (cron 4h)
-            elif [ "$HOUR" -ge 8 ] && [ "$HOUR" -lt 14 ]; then
-              echo "group=group_3" >> $GITHUB_OUTPUT   # 08:00-13:59 UTC (cron 8h)
-            elif [ "$HOUR" -ge 14 ] && [ "$HOUR" -lt 18 ]; then
-              echo "group=group_1" >> $GITHUB_OUTPUT   # 14:00-17:59 UTC (cron 14h)
-            elif [ "$HOUR" -ge 18 ] && [ "$HOUR" -lt 20 ]; then
-              echo "group=group_2" >> $GITHUB_OUTPUT   # 18:00-19:59 UTC (cron 18h)
+            MIN=$(date -u +%M)
+            # Convertir a minutos desde medianoche para comparaciones más precisas
+            TOTAL_MIN=$(( 10#$HOUR * 60 + 10#$MIN ))
+
+            if [ "$TOTAL_MIN" -ge 0 ] && [ "$TOTAL_MIN" -lt 145 ]; then
+              echo "group=group_1" >> $GITHUB_OUTPUT     # 00:00–02:24 UTC
+            elif [ "$TOTAL_MIN" -ge 145 ] && [ "$TOTAL_MIN" -lt 290 ]; then
+              echo "group=group_2" >> $GITHUB_OUTPUT     # 02:25–04:49 UTC
+            elif [ "$TOTAL_MIN" -ge 290 ] && [ "$TOTAL_MIN" -lt 435 ]; then
+              echo "group=group_3" >> $GITHUB_OUTPUT     # 04:50–07:14 UTC
+            elif [ "$TOTAL_MIN" -ge 435 ] && [ "$TOTAL_MIN" -lt 580 ]; then
+              echo "group=group_4" >> $GITHUB_OUTPUT     # 07:15–09:39 UTC
+            elif [ "$TOTAL_MIN" -ge 580 ] && [ "$TOTAL_MIN" -lt 720 ]; then
+              echo "group=group_5" >> $GITHUB_OUTPUT     # 09:40–11:59 UTC
+            elif [ "$TOTAL_MIN" -ge 720 ] && [ "$TOTAL_MIN" -lt 865 ]; then
+              echo "group=group_1" >> $GITHUB_OUTPUT     # 12:00–14:24 UTC
+            elif [ "$TOTAL_MIN" -ge 865 ] && [ "$TOTAL_MIN" -lt 1010 ]; then
+              echo "group=group_2" >> $GITHUB_OUTPUT     # 14:25–16:49 UTC
+            elif [ "$TOTAL_MIN" -ge 1010 ] && [ "$TOTAL_MIN" -lt 1155 ]; then
+              echo "group=group_3" >> $GITHUB_OUTPUT     # 16:50–19:14 UTC
+            elif [ "$TOTAL_MIN" -ge 1155 ] && [ "$TOTAL_MIN" -lt 1300 ]; then
+              echo "group=group_4" >> $GITHUB_OUTPUT     # 19:15–21:39 UTC
             else
-              echo "group=group_3" >> $GITHUB_OUTPUT   # 20:00-23:59 UTC (cron 20h)
+              echo "group=group_5" >> $GITHUB_OUTPUT     # 21:40–23:59 UTC
             fi
           fi
 

@@ -1,32 +1,39 @@
 # Google Trends Monitor
 
-Sistema automatizado para extraer datos de Google Trends y exportarlos a Google Sheets.
+Sistema automatizado para extraer datos de Google Trends y exportarlos a Google Sheets, ejecutado vía GitHub Actions.
+
+**Estado:** Estable. 62 runs consecutivos exitosos (desde 2026-02-03). Los datos se exportan correctamente a Google Sheets en cada ejecución.
 
 ## Características
 
 - Extrae Related Queries (Top + Rising) de Google Trends
-- Extrae Related Topics (Top + Rising)
-- Rate limiting automático para evitar bloqueos
-- Retry logic con backoff exponencial
-- Exportación a Google Sheets en modo append
-- Logging detallado
-- Automatización con cron/Task Scheduler
+- 3 términos monitoreados en 20 regiones (5 grupos de países)
+- Ejecución automática 10 veces al día vía GitHub Actions
+- Rate limiting agresivo (200s entre requests) con backoff exponencial
+- Exportación incremental a Google Sheets (por combinación término/país)
+- Generación de informes para equipo de contenidos
+- Detección y clasificación de apps/términos relevantes
+- Auto-creación de issues en GitHub al fallar, auto-cierre al recuperar
+- Métricas JSON estructuradas por ejecución
+- Logging detallado con backup local JSON
 
 ## Estructura del Proyecto
 
 ```
 trends_monitor/
-├── main.py                    # Script principal
-├── config.py                  # Configuración
-├── trends_scraper.py          # Scraper de Google Trends
-├── google_sheets_exporter.py  # Exportador a Sheets
+├── main.py                    # Script principal (orquestación, validación, métricas)
+├── config.py                  # Configuración central (términos, regiones, grupos, rate limits)
+├── trends_scraper.py          # Scraper de Google Trends (retry, backoff, dedup, ErrorType)
+├── google_sheets_exporter.py  # Exportador incremental a Sheets
+├── report_generator.py        # Generador de informes para contenidos
+├── backup.py                  # Backup JSON local antes de exportar
 ├── rate_limiter.py            # Control de rate limiting
-├── scheduler_setup.sh         # Config cron (Linux/Mac)
-├── scheduler_setup_windows.bat # Config Task Scheduler (Windows)
 ├── requirements.txt           # Dependencias
 ├── .env.example               # Ejemplo de variables de entorno
-├── credentials.json           # Credenciales Google (no incluido)
-└── logs/                      # Directorio de logs
+├── .github/workflows/         # GitHub Actions (ejecución automática 6x/día)
+├── test_mock_scraper.py       # Tests con mock (sin API real)
+├── test_user_agents.py        # Tests de rotación user-agent
+└── logs/                      # Logs, métricas JSON e informes por ejecución
 ```
 
 ## Instalación
@@ -185,37 +192,35 @@ Cuando hagas cambios al código del scraper:
 - Los tests mock prueban la lógica sin gastar cuota de la API
 - Mantener local y GitHub sincronizados evita confusiones y errores
 
-## Fases de Desarrollo
+## Configuración Actual
 
-### Fase 1 (MVP) - Actual
-- ✅ Término: solo "apk"
-- ✅ Región: solo India
-- ✅ Datos: solo Related Queries
-- ✅ Ejecución: manual
+El sistema está en producción con la siguiente configuración:
 
-### Fase 2
-Para pasar a Fase 2, edita `config.py`:
+- **Términos:** 3 (`apk`, `download apk`, `app download`) — definidos en `TERMS_REDUCED`
+- **Regiones:** 20 países en 5 grupos (ver abajo)
+- **Datos:** Related Queries (Top + Rising) — Topics e Interest Over Time desactivados
+- **Ejecución:** GitHub Actions, 10 veces al día (2 por grupo)
+- **Rate limit:** 200s entre requests, max 2 reintentos, backoff capped a 180s
 
+### Grupos de países y horarios (UTC)
+
+| Grupo | Países | Horarios |
+|-------|--------|----------|
+| group_1 | WW, IN, US, BR | 00:00, 12:00 |
+| group_2 | ID, MX, PH, GB | 02:25, 14:25 |
+| group_3 | AU, VN, DE, RU | 04:50, 16:50 |
+| group_4 | TH, FR, IT, CN | 07:15, 19:15 |
+| group_5 | JP, TR, RO, NG | 09:40, 21:40 |
+
+### Para ampliar términos o reactivar Topics
+
+Edita `config.py`:
 ```python
-# Cambiar de:
-CURRENT_TERMS = TERMS_MVP
-# A:
-CURRENT_TERMS = TERMS_FULL
-```
+# Más términos:
+CURRENT_TERMS = TERMS_FULL  # 7 términos (en vez de TERMS_REDUCED con 3)
 
-Y ejecutar con `--full` para incluir Topics:
-```bash
-python main.py --full
-```
-
-### Fase 3
-Para agregar más países, edita `config.py`:
-
-```python
-# Cambiar de:
-CURRENT_REGIONS = REGIONS_MVP
-# A:
-CURRENT_REGIONS = REGIONS_FULL
+# Ejecutar con Topics:
+python main.py --full --group group_1
 ```
 
 ## Automatización
@@ -276,16 +281,17 @@ El repositorio incluye un workflow de GitHub Actions que ejecuta automáticament
 
 ## Estructura de Google Sheets
 
-El sistema crea 4 pestañas:
+El sistema crea las siguientes pestañas:
 
-| Pestaña | Contenido |
-|---------|-----------|
-| Related_Queries_Top | Top queries relacionados |
-| Related_Queries_Rising | Queries en crecimiento |
-| Related_Topics_Top | Top topics relacionados |
-| Related_Topics_Rising | Topics en crecimiento |
+| Pestaña | Contenido | Estado |
+|---------|-----------|--------|
+| Related_Queries_Top | Top queries relacionados | Activo |
+| Related_Queries_Rising | Queries en crecimiento | Activo |
+| Related_Topics_Top | Top topics relacionados | Desactivado (bug PyTrends) |
+| Related_Topics_Rising | Topics en crecimiento | Desactivado (bug PyTrends) |
+| Report_YYYYMMDD | Informes de contenidos por ejecución | Activo |
 
-Columnas en cada pestaña:
+Columnas en cada pestaña de datos:
 - `timestamp`: Fecha/hora de extracción (UTC)
 - `term`: Término buscado
 - `country_code`: Código de país (ej: IN)
@@ -293,6 +299,8 @@ Columnas en cada pestaña:
 - `title`: Query o Topic encontrado
 - `value`: Valor/score
 - `link`: Link a Google Trends
+
+Las pestañas de informe contienen secciones con apps detectadas, watchlist y métricas.
 
 ## Troubleshooting
 
@@ -310,7 +318,7 @@ Columnas en cada pestaña:
 - El email está en `credentials.json` campo `client_email`
 
 ### Error: "Too many requests" de Google Trends
-- El sistema tiene rate limiting de 60 segundos
+- El sistema tiene rate limiting de 200 segundos y backoff exponencial
 - Si persiste, aumenta `RATE_LIMIT_SECONDS` en `config.py`
 
 ### No se extraen datos
@@ -340,14 +348,15 @@ Edita `config.py` para ajustar:
 
 ```python
 # Rate limiting (segundos entre requests)
-RATE_LIMIT_SECONDS = 60
+RATE_LIMIT_SECONDS = 200
 
 # Reintentos en caso de error
-MAX_RETRIES = 3
+MAX_RETRIES = 2
 RETRY_DELAY_SECONDS = 30
+MAX_BACKOFF_SECONDS = 180
 
 # Timeframe de datos
-TIMEFRAME = "now 1-d"  # Últimas 24 horas
+TIMEFRAME = "now 4-H"  # Últimas 4 horas
 ```
 
 ## Licencia
