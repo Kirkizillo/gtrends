@@ -196,7 +196,8 @@ Cuando hagas cambios al código del scraper:
 
 El sistema está en producción con la siguiente configuración:
 
-- **Términos:** 3 (`apk`, `download apk`, `app download`) — definidos en `TERMS_REDUCED`
+- **Términos:** 3 base (`apk`, `download apk`, `app download`) + keywords localizadas por país
+- **Keywords localizadas:** 12 países con términos extra en idioma local (ej: `baixar apk` para BR, `télécharger apk` para FR)
 - **Regiones:** 20 países en 5 grupos (ver abajo)
 - **Datos:** Related Queries (Top + Rising) — Topics e Interest Over Time desactivados
 - **Ejecución:** GitHub Actions, 10 veces al día (2 por grupo)

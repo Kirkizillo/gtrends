@@ -78,7 +78,8 @@ PROXIES = os.getenv("PROXIES", "").split(",") if os.getenv("PROXIES") else []
 # Distribución de requests
 # Divide los países en grupos para ejecutar en diferentes horarios
 # 20 regiones / 5 grupos = 4 regiones por grupo
-# Cada grupo: 3 términos × 4 regiones × 200s = 40 min (timeout 90 min)
+# Base: 3 términos × 4 regiones × 200s = 40 min (timeout 90 min)
+# Con COUNTRY_EXTRA_TERMS: 13-16 requests por grupo = 43-53 min
 COUNTRY_GROUPS = {
     "group_1": ["WW", "IN", "US", "BR"],  # 00:00, 12:00 UTC — Global + Americas
     "group_2": ["ID", "MX", "PH", "GB"],  # 02:25, 14:25 UTC — SE Asia + Americas + Europe
@@ -127,8 +128,22 @@ TERMS_REDUCED = [
     "app download"
 ]
 
-# Próximo paso: keywords localizadas por grupo (semana del 2026-02-20)
-# Ejemplo: group_4 (TH, FR, IT, CN) podría usar ["apk", "télécharger apk", "ดาวน์โหลด apk"]
+# Términos extra por país (se SUMAN a CURRENT_TERMS, no los reemplazan)
+# Países sin entrada (WW, IN, US, GB, PH, AU, VN, NG) usan solo los 3 base
+COUNTRY_EXTRA_TERMS = {
+    "BR": ["baixar apk"],           # Portugués
+    "MX": ["descargar apk"],        # Español
+    "ID": ["unduh apk"],            # Bahasa Indonesia
+    "DE": ["apk herunterladen"],    # Alemán
+    "RU": ["скачать apk"],          # Ruso
+    "TH": ["ดาวน์โหลด apk"],       # Tailandés
+    "FR": ["télécharger apk"],      # Francés
+    "IT": ["scaricare apk"],        # Italiano
+    "TR": ["apk indir"],            # Turco
+    "JP": ["apkダウンロード"],       # Japonés
+    "CN": ["下载apk"],              # Chino
+    "RO": ["descărcare apk"],       # Rumano
+}
 
 CURRENT_TERMS = TERMS_REDUCED
 CURRENT_REGIONS = REGIONS_FULL

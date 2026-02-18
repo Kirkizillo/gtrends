@@ -1,30 +1,106 @@
 # TODO - Google Trends Monitor
 
-## Estado Actual (2026-02-13)
+## Estado Actual (2026-02-18)
 
-El sistema lleva **62 runs consecutivos exitosos** (desde el 3 de febrero). Los datos se exportan correctamente a Google Sheets en cada ejecución. El último fallo fue el Run #82 el 2 de febrero.
+El sistema lleva **114 runs consecutivos exitosos** (Runs #83–#196, desde el 3 de febrero). Los 5 grupos (incluidos los nuevos group_4 y group_5) funcionan sin fallos. Los datos se exportan correctamente a Google Sheets en cada ejecución.
 
 **Resumen de estabilidad:**
-- Runs totales: 144
+- Runs totales: 196
 - Último fallo: 2026-02-02 (Run #82)
-- Racha actual: 62 éxitos consecutivos (Runs #83–#144)
-- Todos los grupos (1, 2, 3) funcionan sin problemas
+- Racha actual: 114 éxitos consecutivos (Runs #83–#196)
+- 5 grupos funcionando: 52 runs post-escalamiento sin fallos (13–18 Feb)
+
+**Análisis de datos por territorio (13–18 Feb, Related_Queries_Top):**
+- Excelentes (sin tocar): PH (2.081), IN (1.807), ID (1.520), BR (1.236), VN (978), TR (254), NG (286)
+- Buenos (mejorarán con localización): MX (950), DE (391), RU (339), TH (79), FR (71), IT (67)
+- Necesitan localización urgente: JP (12), RO (8)
+- Problemático estructuralmente: CN (3 filas — Google bloqueado en China)
 
 ---
 
 ## Pendiente
 
-### Monitorización de nuevos territorios (semana del 2026-02-13)
-- [ ] Verificar que group_4 (TH, FR, IT, CN) ejecuta correctamente
-- [ ] Verificar que group_5 (JP, TR, RO, NG) ejecuta correctamente
-- [ ] Comparar tasas de éxito/fallo entre grupos antiguos (1-3) y nuevos (4-5)
-- [ ] Si hay timeouts o 429 persistentes en nuevos grupos → revertir
-- [ ] **Decisión a la semana (~2026-02-20):** Mantener, ajustar o revertir
+### Keywords localizadas por país (2026-02-18)
 
-### Siguiente fase: Keywords localizadas (después de validar territorios)
-- [ ] Mapear términos de búsqueda por idioma/región (ej: "télécharger apk" para FR)
-- [ ] Evaluar asignar `TERMS` distintos por grupo según relevancia regional
-- [ ] "apk" como término ancla en todos los grupos, complementos localizados
+**Qué:** Añadir términos de búsqueda en el idioma local de cada país, sin quitar los existentes.
+
+**Por qué:** Los términos en inglés funcionan bien en mercados anglófonos y del sudeste asiático, pero FR (71 filas), IT (67), JP (12), RO (8) y CN (3) devuelven datos escasos porque sus usuarios buscan en su idioma local.
+
+**Cómo — Opción B (términos por país):**
+
+1. Añadir `COUNTRY_EXTRA_TERMS` en `config.py`:
+   ```python
+   # Términos extra por país (se SUMAN a CURRENT_TERMS)
+   COUNTRY_EXTRA_TERMS = {
+       "BR": ["baixar apk"],           # Portugués
+       "MX": ["descargar apk"],        # Español
+       "ID": ["unduh apk"],            # Bahasa Indonesia
+       "DE": ["apk herunterladen"],    # Alemán
+       "RU": ["скачать apk"],          # Ruso
+       "TH": ["ดาวน์โหลด apk"],       # Tailandés
+       "FR": ["télécharger apk"],      # Francés
+       "IT": ["scaricare apk"],        # Italiano
+       "TR": ["apk indir"],            # Turco
+       "JP": ["apkダウンロード"],       # Japonés
+       "CN": ["下载apk"],              # Chino (intento)
+       "RO": ["descărcare apk"],       # Rumano (intento)
+   }
+   ```
+   Países sin entrada (WW, IN, US, GB, PH, AU, VN, NG) siguen con los 3 base.
+
+2. Cambiar el bucle en `main.py` de `term → region` a `region → terms`:
+   ```python
+   # ANTES:
+   for term in terms:
+       for geo, country_name in regions.items():
+           scrape(term, geo)
+
+   # DESPUÉS:
+   for geo, country_name in regions.items():
+       country_terms = terms + config.COUNTRY_EXTRA_TERMS.get(geo, [])
+       for term in country_terms:
+           scrape(term, geo)
+   ```
+
+3. Ajustar `total_combinations` para que refleje la suma variable:
+   ```python
+   total_combinations = sum(
+       len(terms) + len(config.COUNTRY_EXTRA_TERMS.get(geo, []))
+       for geo in regions
+   )
+   ```
+
+4. Actualizar el log inicial para mostrar el desglose de términos por país.
+
+**Impacto en tiempo por grupo:**
+
+| Grupo | Requests antes | Requests después | Tiempo estimado |
+|-------|---------------|-----------------|-----------------|
+| group_1 (WW,IN,US,BR) | 12 | 13 (+1 BR) | ~43 min |
+| group_2 (ID,MX,PH,GB) | 12 | 14 (+1 ID, +1 MX) | ~47 min |
+| group_3 (AU,VN,DE,RU) | 12 | 14 (+1 DE, +1 RU) | ~47 min |
+| group_4 (TH,FR,IT,CN) | 12 | 16 (+1 cada uno) | ~53 min |
+| group_5 (JP,TR,RO,NG) | 12 | 15 (+1 JP, +1 TR, +1 RO) | ~50 min |
+
+Todos por debajo del timeout de 90 min. El más cargado es group_4 con ~53 min.
+
+**Archivos a modificar:**
+- `config.py` — Añadir `COUNTRY_EXTRA_TERMS`
+- `main.py` — Reordenar bucle, ajustar total_combinations y log
+
+**Archivos que NO se tocan:**
+- `trends_scraper.py` — No cambia (recibe term + geo, igual que antes)
+- `google_sheets_exporter.py` — No cambia (recibe TrendData, igual que antes)
+- `report_generator.py` — No cambia
+- `.github/workflows/` — No cambia
+
+**Rollback:** Eliminar `COUNTRY_EXTRA_TERMS` de config.py y revertir el bucle en main.py.
+
+**Monitorización post-deploy:**
+- [ ] Verificar que los 5 grupos completan dentro del timeout
+- [ ] Comparar volumen de datos nuevos vs anterior por país (especialmente FR, IT, JP, RO, CN)
+- [ ] Si group_4 (~53 min) se acerca al timeout → quitar 1 extra term del grupo
+- [ ] **Revisión a la semana (~2026-02-25):** Evaluar impacto de keywords localizadas
 
 ### Notificaciones
 - [ ] Decidir canal de notificación (Slack, Email, Notion)
@@ -40,6 +116,14 @@ El sistema lleva **62 runs consecutivos exitosos** (desde el 3 de febrero). Los 
 ---
 
 ## Completado
+
+### 2026-02-18 — Verificación escalamiento territorial
+- [x] Verificar que group_4 (TH, FR, IT, CN) ejecuta correctamente → **11 runs, 0 fallos**
+- [x] Verificar que group_5 (JP, TR, RO, NG) ejecuta correctamente → **10 runs, 0 fallos**
+- [x] Comparar tasas de éxito/fallo entre grupos antiguos (1-3) y nuevos (4-5) → **100% éxito en todos**
+- [x] Decisión: **Mantener los 5 grupos, no se requiere reversión**
+- [x] Análisis de datos del spreadsheet por territorio (volumen y calidad)
+- [x] Identificación de territorios que necesitan keywords localizadas
 
 ### 2026-02-13 — Escalamiento territorial
 - [x] Añadir 8 nuevos territorios: TH, FR, IT, CN, JP, TR, RO, NG

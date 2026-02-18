@@ -252,21 +252,27 @@ def run_monitor(logger, include_topics: bool = False, include_interest: bool = F
     failed_combinations = []  # Tracking failed term/region combinations
     all_data = []  # Acumular todos los datos para el informe
 
-    total_combinations = len(terms) * len(regions)
+    total_combinations = sum(
+        len(terms) + len(config.COUNTRY_EXTRA_TERMS.get(geo, []))
+        for geo in regions
+    )
     current = 0
 
-    logger.info(f"\nIniciando scraping incremental: {len(terms)} términos × {len(regions)} países = {total_combinations} combinaciones")
+    logger.info(f"\nIniciando scraping incremental: {total_combinations} combinaciones en {len(regions)} países")
+    for geo in regions:
+        country_terms = terms + config.COUNTRY_EXTRA_TERMS.get(geo, [])
+        logger.info(f"  {geo}: {len(country_terms)} términos {country_terms}")
 
     # Limpiar backups antiguos al inicio
     cleanup_old_backups(keep_days=7)
 
-    for term_idx, term in enumerate(terms, 1):
-        for geo, country_name in regions.items():
+    for geo, country_name in regions.items():
+        country_terms = terms + config.COUNTRY_EXTRA_TERMS.get(geo, [])
+        for term in country_terms:
             current += 1
             logger.info(f"\n[{current}/{total_combinations}] Procesando '{term}' en {country_name} ({geo})")
 
             batch_data = []
-            combination_failed = False  # Track if this combination failed
 
             # Extraer Related Queries
             queries_result = scraper.scrape_related_queries(term, geo, country_name)

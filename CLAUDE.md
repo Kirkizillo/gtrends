@@ -43,7 +43,8 @@ python main.py --setup
 ### Key Components
 
 **config.py** - Central configuration:
-- `CURRENT_TERMS` = `TERMS_REDUCED` (3 terms: apk, download apk, app download)
+- `CURRENT_TERMS` = `TERMS_REDUCED` (3 base terms: apk, download apk, app download)
+- `COUNTRY_EXTRA_TERMS` - Per-country localized terms (added to base, not replacing)
 - `CURRENT_REGIONS` = `REGIONS_FULL` (20 regions across 5 groups)
 - `COUNTRY_GROUPS` - 5 groups of 4 regions each, staggered ~2h25min apart
 - `RATE_LIMIT_SECONDS` = 200s between requests
@@ -72,6 +73,7 @@ python main.py --setup
 
 **main.py** - Orchestration:
 - Config validation with fail-fast before scraping
+- Iterates region-first, then terms (base + country extras)
 - Incremental scraping and export per combination
 - Structured JSON metrics logged and saved per run
 - Error breakdown by type in final summary
@@ -90,10 +92,12 @@ Group detection uses minute-based ranges (TOTAL_MIN) to tolerate GitHub Actions 
 On failure: Creates GitHub Issue automatically (with dedup, max 1 per 24h) + optional Slack notification.
 On success: Auto-closes any open `scraping-failure` issues.
 
-### Current Status (2026-02-13)
+### Current Status (2026-02-18)
 
-The system is stable: 62 consecutive successful runs since Feb 3 (Run #83–#144).
+The system is stable: 114 consecutive successful runs since Feb 3 (Run #83–#196).
 Last failure was Run #82 on Feb 2. All data exports correctly to Google Sheets.
+Territory scaling (12→20 regions) deployed Feb 13, verified stable with 52 post-scaling runs.
+Localized keywords per country deployed Feb 18 (12 countries with extra terms).
 
 Topics extraction is disabled (PyTrends bug). Interest Over Time is disabled.
 Only Related Queries (Top + Rising) are active.
