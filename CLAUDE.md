@@ -47,12 +47,16 @@ python main.py --setup
 - `COUNTRY_EXTRA_TERMS` - Per-country localized terms (added to base, not replacing)
 - `CURRENT_REGIONS` = `REGIONS_FULL` (20 regions across 5 groups)
 - `COUNTRY_GROUPS` - 5 groups of 4 regions each, staggered ~2h25min apart
+- `TIMEFRAME` = `"now 4-H"` — Base terms use 4-hour window
+- `TIMEFRAME_EXTRA_TERMS` = `"now 1-d"` — Localized terms use 24-hour window (more volume)
 - `RATE_LIMIT_SECONDS` = 200s between requests
 - `MAX_RETRIES` = 2, `MAX_BACKOFF_SECONDS` = 180
 - `SHEET_NAMES` - Google Sheets tab names
 
 **trends_scraper.py** - Core scraping logic:
 - `TrendData` dataclass - Standard data structure for all scraped items
+- `_build_payload()` - Accepts optional `timeframe` override (default: `config.TIMEFRAME`)
+- `scrape_related_queries()` - Accepts optional `timeframe` parameter for per-term timeframe control
 - `_fetch_with_retry()` - Handles 429 rate limits with exponential backoff (capped at 180s)
 - `_deduplicate()` - Case-insensitive, Unicode-aware deduplication
 - `ErrorType` enum - Classifies errors (RATE_LIMIT, NO_DATA, AUTH_ERROR, NETWORK_ERROR, UNKNOWN)
@@ -74,6 +78,8 @@ python main.py --setup
 **main.py** - Orchestration:
 - Config validation with fail-fast before scraping
 - Iterates region-first, then terms (base + country extras)
+- Per-term timeframe selection: base terms use `TIMEFRAME` (4h), localized terms use `TIMEFRAME_EXTRA_TERMS` (24h)
+- `extra_terms_ok` set: localized terms that already work on 4h (e.g., `apk indir`) keep the base timeframe
 - Incremental scraping and export per combination
 - Structured JSON metrics logged and saved per run
 - Error breakdown by type in final summary
@@ -92,12 +98,21 @@ Group detection uses minute-based ranges (TOTAL_MIN) to tolerate GitHub Actions 
 On failure: Creates GitHub Issue automatically (with dedup, max 1 per 24h) + optional Slack notification.
 On success: Auto-closes any open `scraping-failure` issues.
 
-### Current Status (2026-02-18)
+### Current Status (2026-02-20)
 
-The system is stable: 114 consecutive successful runs since Feb 3 (Run #83–#196).
-Last failure was Run #82 on Feb 2. All data exports correctly to Google Sheets.
-Territory scaling (12→20 regions) deployed Feb 13, verified stable with 52 post-scaling runs.
-Localized keywords per country deployed Feb 18 (12 countries with extra terms).
+The system is stable with 100% success rate since Feb 3 (Run #83 onward, 0 failures).
+All data exports correctly to Google Sheets.
+
+**Deployment timeline:**
+- Feb 13: Territory scaling (12→20 regions, 3→5 groups)
+- Feb 18: Localized keywords per country (12 countries with extra terms in local language)
+- Feb 20: Dual timeframe — localized terms switched to 24h window (`now 1-d`) for better data yield
+
+**Localized keywords results (Feb 18-20 analysis):**
+- `apk indir` (TR): 32 rows in 3 days — works well on 4h timeframe, kept as-is
+- `baixar apk` (BR): 4 rows — marginal, switched to 24h
+- Other 10 localized terms: 0 rows on 4h timeframe, switched to 24h to test wider window
+- Base English terms generate 98.9% of all data
 
 Topics extraction is disabled (PyTrends bug). Interest Over Time is disabled.
 Only Related Queries (Top + Rising) are active.

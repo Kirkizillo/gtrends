@@ -2,7 +2,7 @@
 
 Sistema automatizado para extraer datos de Google Trends y exportarlos a Google Sheets, ejecutado vía GitHub Actions.
 
-**Estado:** Estable. 62 runs consecutivos exitosos (desde 2026-02-03). Los datos se exportan correctamente a Google Sheets en cada ejecución.
+**Estado:** Estable. 100% de éxito desde 2026-02-03 (~140+ runs consecutivos). Los datos se exportan correctamente a Google Sheets en cada ejecución.
 
 ## Características
 
@@ -198,6 +198,7 @@ El sistema está en producción con la siguiente configuración:
 
 - **Términos:** 3 base (`apk`, `download apk`, `app download`) + keywords localizadas por país
 - **Keywords localizadas:** 12 países con términos extra en idioma local (ej: `baixar apk` para BR, `télécharger apk` para FR)
+- **Dual timeframe:** Los términos base usan ventana de 4 horas (`now 4-H`); los localizados usan 24 horas (`now 1-d`) para captar mayor volumen de datos
 - **Regiones:** 20 países en 5 grupos (ver abajo)
 - **Datos:** Related Queries (Top + Rising) — Topics e Interest Over Time desactivados
 - **Ejecución:** GitHub Actions, 10 veces al día (2 por grupo)
@@ -357,7 +358,8 @@ RETRY_DELAY_SECONDS = 30
 MAX_BACKOFF_SECONDS = 180
 
 # Timeframe de datos
-TIMEFRAME = "now 4-H"  # Últimas 4 horas
+TIMEFRAME = "now 4-H"            # Términos base (últimas 4 horas)
+TIMEFRAME_EXTRA_TERMS = "now 1-d" # Keywords localizadas (últimas 24 horas)
 ```
 
 ## Licencia

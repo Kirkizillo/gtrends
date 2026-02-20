@@ -1,106 +1,49 @@
 # TODO - Google Trends Monitor
 
-## Estado Actual (2026-02-18)
+## Estado Actual (2026-02-20)
 
-El sistema lleva **114 runs consecutivos exitosos** (Runs #83–#196, desde el 3 de febrero). Los 5 grupos (incluidos los nuevos group_4 y group_5) funcionan sin fallos. Los datos se exportan correctamente a Google Sheets en cada ejecución.
+El sistema mantiene **100% de éxito** desde el 3 de febrero (Run #83 en adelante, 0 fallos). Los 5 grupos funcionan sin problemas. Los datos se exportan correctamente a Google Sheets en cada ejecución.
 
 **Resumen de estabilidad:**
-- Runs totales: 196
 - Último fallo: 2026-02-02 (Run #82)
-- Racha actual: 114 éxitos consecutivos (Runs #83–#196)
-- 5 grupos funcionando: 52 runs post-escalamiento sin fallos (13–18 Feb)
+- Desde entonces: 0 fallos en ~140+ runs consecutivos
+- 5 grupos funcionando correctamente
+- Keywords localizadas desplegadas el 18 Feb, dual timeframe el 20 Feb
 
-**Análisis de datos por territorio (13–18 Feb, Related_Queries_Top):**
-- Excelentes (sin tocar): PH (2.081), IN (1.807), ID (1.520), BR (1.236), VN (978), TR (254), NG (286)
-- Buenos (mejorarán con localización): MX (950), DE (391), RU (339), TH (79), FR (71), IT (67)
-- Necesitan localización urgente: JP (12), RO (8)
-- Problemático estructuralmente: CN (3 filas — Google bloqueado en China)
+**Análisis de datos por territorio (18–20 Feb, Related_Queries_Top):**
+- Excelentes: PH (290), IN (282), WW (281), BR (193), ID (190), US (171)
+- Buenos: VN (127), TR (125), MX (95), NG (95)
+- Bajos: GB (64), FR (35), TH (34), IT (33), DE (31), RU (29)
+- Muy bajos: AU (13)
+- Mínimos: CN (4), JP (4), RO (4)
+
+**Análisis de keywords localizadas (18–20 Feb):**
+- `apk indir` (TR): 24 rows — funciona bien con timeframe de 4h
+- `baixar apk` (BR): 2 rows — marginal
+- Las otras 10 keywords: 0 rows con timeframe de 4h
+- Solución aplicada (20 Feb): las 11 keywords con bajo/nulo rendimiento ahora usan `now 1-d` (24h)
+- `apk indir` se mantiene con `now 4-H` porque ya funciona
 
 ---
 
 ## Pendiente
 
-### Keywords localizadas por país (2026-02-18)
+### Evaluar resultados del dual timeframe (~2026-02-25)
 
-**Qué:** Añadir términos de búsqueda en el idioma local de cada país, sin quitar los existentes.
+**Contexto:** El 20 Feb se cambió el timeframe de las keywords localizadas con 0 resultados de `now 4-H` a `now 1-d`. Hay que evaluar si la ventana de 24h mejora el yield de datos.
 
-**Por qué:** Los términos en inglés funcionan bien en mercados anglófonos y del sudeste asiático, pero FR (71 filas), IT (67), JP (12), RO (8) y CN (3) devuelven datos escasos porque sus usuarios buscan en su idioma local.
+**Qué verificar:**
+- [ ] ¿Las 10 keywords que daban 0 resultados ahora generan datos con `now 1-d`?
+- [ ] ¿`apk indir` (TR) sigue funcionando bien con `now 4-H`?
+- [ ] ¿Los tiempos de ejecución se mantienen estables?
+- [ ] Si alguna keyword sigue en 0 tras una semana con 24h → considerar eliminarla para ahorrar tiempo
+- [ ] Si funciona → considerar si `baixar apk` (BR) debería volver a `now 4-H` o quedarse en `now 1-d`
 
-**Cómo — Opción B (términos por país):**
-
-1. Añadir `COUNTRY_EXTRA_TERMS` en `config.py`:
-   ```python
-   # Términos extra por país (se SUMAN a CURRENT_TERMS)
-   COUNTRY_EXTRA_TERMS = {
-       "BR": ["baixar apk"],           # Portugués
-       "MX": ["descargar apk"],        # Español
-       "ID": ["unduh apk"],            # Bahasa Indonesia
-       "DE": ["apk herunterladen"],    # Alemán
-       "RU": ["скачать apk"],          # Ruso
-       "TH": ["ดาวน์โหลด apk"],       # Tailandés
-       "FR": ["télécharger apk"],      # Francés
-       "IT": ["scaricare apk"],        # Italiano
-       "TR": ["apk indir"],            # Turco
-       "JP": ["apkダウンロード"],       # Japonés
-       "CN": ["下载apk"],              # Chino (intento)
-       "RO": ["descărcare apk"],       # Rumano (intento)
-   }
-   ```
-   Países sin entrada (WW, IN, US, GB, PH, AU, VN, NG) siguen con los 3 base.
-
-2. Cambiar el bucle en `main.py` de `term → region` a `region → terms`:
-   ```python
-   # ANTES:
-   for term in terms:
-       for geo, country_name in regions.items():
-           scrape(term, geo)
-
-   # DESPUÉS:
-   for geo, country_name in regions.items():
-       country_terms = terms + config.COUNTRY_EXTRA_TERMS.get(geo, [])
-       for term in country_terms:
-           scrape(term, geo)
-   ```
-
-3. Ajustar `total_combinations` para que refleje la suma variable:
-   ```python
-   total_combinations = sum(
-       len(terms) + len(config.COUNTRY_EXTRA_TERMS.get(geo, []))
-       for geo in regions
-   )
-   ```
-
-4. Actualizar el log inicial para mostrar el desglose de términos por país.
-
-**Impacto en tiempo por grupo:**
-
-| Grupo | Requests antes | Requests después | Tiempo estimado |
-|-------|---------------|-----------------|-----------------|
-| group_1 (WW,IN,US,BR) | 12 | 13 (+1 BR) | ~43 min |
-| group_2 (ID,MX,PH,GB) | 12 | 14 (+1 ID, +1 MX) | ~47 min |
-| group_3 (AU,VN,DE,RU) | 12 | 14 (+1 DE, +1 RU) | ~47 min |
-| group_4 (TH,FR,IT,CN) | 12 | 16 (+1 cada uno) | ~53 min |
-| group_5 (JP,TR,RO,NG) | 12 | 15 (+1 JP, +1 TR, +1 RO) | ~50 min |
-
-Todos por debajo del timeout de 90 min. El más cargado es group_4 con ~53 min.
-
-**Archivos a modificar:**
-- `config.py` — Añadir `COUNTRY_EXTRA_TERMS`
-- `main.py` — Reordenar bucle, ajustar total_combinations y log
-
-**Archivos que NO se tocan:**
-- `trends_scraper.py` — No cambia (recibe term + geo, igual que antes)
-- `google_sheets_exporter.py` — No cambia (recibe TrendData, igual que antes)
-- `report_generator.py` — No cambia
-- `.github/workflows/` — No cambia
-
-**Rollback:** Eliminar `COUNTRY_EXTRA_TERMS` de config.py y revertir el bucle en main.py.
-
-**Monitorización post-deploy:**
-- [ ] Verificar que los 5 grupos completan dentro del timeout
-- [ ] Comparar volumen de datos nuevos vs anterior por país (especialmente FR, IT, JP, RO, CN)
-- [ ] Si group_4 (~53 min) se acerca al timeout → quitar 1 extra term del grupo
-- [ ] **Revisión a la semana (~2026-02-25):** Evaluar impacto de keywords localizadas
+**Decisiones pendientes sobre mercados débiles:**
+- CN: Google bloqueado en China, 4 filas en 3 días. Si `now 1-d` no mejora → evaluar eliminar
+- JP: Solo 4 filas en 3 días. Si localización con 24h no mejora → evaluar eliminar
+- RO: Solo 4 filas en 3 días. Si localización con 24h no mejora → evaluar eliminar
+- AU: 13 filas, sin keyword localizada (anglófono). Rendimiento bajo pero estable
 
 ### Notificaciones
 - [ ] Decidir canal de notificación (Slack, Email, Notion)
@@ -116,6 +59,23 @@ Todos por debajo del timeout de 90 min. El más cargado es group_4 con ~53 min.
 ---
 
 ## Completado
+
+### 2026-02-20 — Dual timeframe para keywords localizadas
+- [x] Análisis de rendimiento Feb 18-20: solo 2/12 keywords localizadas generan datos con `now 4-H`
+- [x] `apk indir` (TR): 24 rows, funciona bien → se mantiene con `now 4-H`
+- [x] `baixar apk` (BR): 2 rows, marginal → cambiada a `now 1-d`
+- [x] Otras 10 keywords: 0 rows → cambiadas a `now 1-d`
+- [x] Añadir `TIMEFRAME_EXTRA_TERMS = "now 1-d"` en config.py
+- [x] Añadir parámetro `timeframe` a `_build_payload()` y `scrape_related_queries()` en trends_scraper.py
+- [x] Implementar `extra_terms_ok` set en main.py para excluir `apk indir` del cambio
+- [x] Verificar que links generados en TrendData usan el timeframe correcto
+
+### 2026-02-18 — Keywords localizadas por país
+- [x] Añadir `COUNTRY_EXTRA_TERMS` en config.py (12 países con términos en idioma local)
+- [x] Reordenar bucle en main.py de term→region a region→terms
+- [x] Ajustar `total_combinations` para suma variable
+- [x] Verificar tiempos de ejecución post-deploy (group_4 ~51 min, todos dentro de margen)
+- [x] 24 runs exitosos verificados (18-20 Feb, 100% success rate)
 
 ### 2026-02-18 — Verificación escalamiento territorial
 - [x] Verificar que group_4 (TH, FR, IT, CN) ejecuta correctamente → **11 runs, 0 fallos**
