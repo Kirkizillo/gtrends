@@ -151,15 +151,16 @@ class TrendsScraper:
             raise
 
     @retry_with_backoff(max_retries=config.MAX_RETRIES, base_delay=config.RETRY_DELAY_SECONDS)
-    def _build_payload(self, term: str, geo: str):
+    def _build_payload(self, term: str, geo: str, timeframe: str = None):
         """Construye el payload para una búsqueda."""
         self.rate_limiter.wait()
         # WW (Worldwide) usa geo vacío en PyTrends
         pytrends_geo = "" if geo == "WW" else geo
-        logger.info(f"Construyendo payload para '{term}' en {geo or 'Worldwide'}")
+        tf = timeframe or config.TIMEFRAME
+        logger.info(f"Construyendo payload para '{term}' en {geo or 'Worldwide'} (timeframe={tf})")
         self.pytrends.build_payload(
             kw_list=[term],
-            timeframe=config.TIMEFRAME,
+            timeframe=tf,
             geo=pytrends_geo
         )
 
@@ -225,7 +226,8 @@ class TrendsScraper:
         self,
         term: str,
         geo: str,
-        country_name: str
+        country_name: str,
+        timeframe: str = None
     ) -> ScrapingResult:
         """
         Extrae Related Queries (Top y Rising) para un término.
@@ -234,15 +236,17 @@ class TrendsScraper:
             term: Término de búsqueda
             geo: Código de país (ej: 'IN')
             country_name: Nombre del país
+            timeframe: Timeframe override (default: config.TIMEFRAME)
 
         Returns:
             ScrapingResult con los datos extraídos
         """
         result = ScrapingResult(success=False)
         timestamp = self._get_timestamp()
+        tf = timeframe or config.TIMEFRAME
 
         try:
-            self._build_payload(term, geo)
+            self._build_payload(term, geo, timeframe=timeframe)
             queries = self._fetch_with_retry(lambda: self.pytrends.related_queries(), term=term, geo=geo)
 
             if not queries or term not in queries:
@@ -265,7 +269,7 @@ class TrendsScraper:
                         data_type='queries_top',
                         title=query_text,
                         value=str(row.get('value', '')),
-                        link=f"https://trends.google.com/trends/explore?q={quote_plus(query_text)}&geo={geo}&date={quote_plus(config.TIMEFRAME)}"
+                        link=f"https://trends.google.com/trends/explore?q={quote_plus(query_text)}&geo={geo}&date={quote_plus(tf)}"
                     ))
                 logger.info(f"Extraídos {len(df_top)} Top Queries para '{term}'")
 
@@ -282,7 +286,7 @@ class TrendsScraper:
                         data_type='queries_rising',
                         title=query_text,
                         value=str(row.get('value', '')),
-                        link=f"https://trends.google.com/trends/explore?q={quote_plus(query_text)}&geo={geo}&date={quote_plus(config.TIMEFRAME)}"
+                        link=f"https://trends.google.com/trends/explore?q={quote_plus(query_text)}&geo={geo}&date={quote_plus(tf)}"
                     ))
                 logger.info(f"Extraídos {len(df_rising)} Rising Queries para '{term}'")
 

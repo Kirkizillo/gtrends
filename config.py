@@ -55,8 +55,13 @@ REGIONS_FULL = {
 # Configuración de Google Trends
 # =============================================================================
 
-# Timeframe: últimas 4 horas
+# Timeframe: últimas 4 horas (términos base)
 TIMEFRAME = "now 4-H"
+
+# Timeframe para términos localizados (COUNTRY_EXTRA_TERMS)
+# Ventana más amplia porque los términos localizados tienen menor volumen
+# y en 4h no generan suficientes related queries
+TIMEFRAME_EXTRA_TERMS = "now 1-d"
 
 # Rate limiting: segundos entre requests
 RATE_LIMIT_SECONDS = 200

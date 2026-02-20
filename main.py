@@ -266,16 +266,25 @@ def run_monitor(logger, include_topics: bool = False, include_interest: bool = F
     # Limpiar backups antiguos al inicio
     cleanup_old_backups(keep_days=7)
 
+    # Términos localizados que ya funcionan con timeframe base (4h)
+    extra_terms_ok = {"apk indir"}
+
     for geo, country_name in regions.items():
-        country_terms = terms + config.COUNTRY_EXTRA_TERMS.get(geo, [])
+        extra_terms = config.COUNTRY_EXTRA_TERMS.get(geo, [])
+        country_terms = terms + extra_terms
         for term in country_terms:
             current += 1
-            logger.info(f"\n[{current}/{total_combinations}] Procesando '{term}' en {country_name} ({geo})")
+
+            # Determinar timeframe: los extra terms (excepto los que ya funcionan) usan ventana de 1 día
+            is_extra = term in extra_terms and term not in extra_terms_ok
+            timeframe = config.TIMEFRAME_EXTRA_TERMS if is_extra else None
+            tf_label = f" [timeframe={config.TIMEFRAME_EXTRA_TERMS}]" if is_extra else ""
+            logger.info(f"\n[{current}/{total_combinations}] Procesando '{term}' en {country_name} ({geo}){tf_label}")
 
             batch_data = []
 
             # Extraer Related Queries
-            queries_result = scraper.scrape_related_queries(term, geo, country_name)
+            queries_result = scraper.scrape_related_queries(term, geo, country_name, timeframe=timeframe)
             if queries_result.success:
                 batch_data.extend(queries_result.data)
                 logger.info(f"  Queries: {len(queries_result.data)} registros")
