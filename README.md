@@ -2,7 +2,7 @@
 
 Sistema automatizado para extraer datos de Google Trends y exportarlos a Google Sheets, ejecutado vía GitHub Actions.
 
-**Estado:** Estable. 100% de éxito desde 2026-02-03 (~140+ runs consecutivos). Los datos se exportan correctamente a Google Sheets en cada ejecución.
+**Estado:** Estable. 100% de éxito desde 2026-02-03 (~200+ runs consecutivos). Los datos se exportan correctamente a Google Sheets en cada ejecución.
 
 ## Características
 
@@ -197,7 +197,7 @@ Cuando hagas cambios al código del scraper:
 El sistema está en producción con la siguiente configuración:
 
 - **Términos:** 3 base (`apk`, `download apk`, `app download`) + keywords localizadas por país
-- **Keywords localizadas:** 12 países con términos extra en idioma local (ej: `baixar apk` para BR, `télécharger apk` para FR)
+- **Keywords localizadas:** 7 países con términos extra en idioma local (ej: `baixar apk` para BR, `descargar apk` para MX y CO)
 - **Dual timeframe:** Los términos base usan ventana de 4 horas (`now 4-H`); los localizados usan 24 horas (`now 1-d`) para captar mayor volumen de datos
 - **Regiones:** 20 países en 5 grupos (ver abajo)
 - **Datos:** Related Queries (Top + Rising) — Topics e Interest Over Time desactivados
@@ -211,7 +211,7 @@ El sistema está en producción con la siguiente configuración:
 | group_1 | WW, IN, US, BR | 00:00, 12:00 |
 | group_2 | ID, MX, PH, GB | 02:25, 14:25 |
 | group_3 | AU, VN, DE, RU | 04:50, 16:50 |
-| group_4 | TH, FR, IT, CN | 07:15, 19:15 |
+| group_4 | TH, FR, IT, CO | 07:15, 19:15 |
 | group_5 | JP, TR, RO, NG | 09:40, 21:40 |
 
 ### Para ampliar términos o reactivar Topics

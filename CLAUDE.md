@@ -44,8 +44,8 @@ python main.py --setup
 
 **config.py** - Central configuration:
 - `CURRENT_TERMS` = `TERMS_REDUCED` (3 base terms: apk, download apk, app download)
-- `COUNTRY_EXTRA_TERMS` - Per-country localized terms (added to base, not replacing)
-- `CURRENT_REGIONS` = `REGIONS_FULL` (20 regions across 5 groups)
+- `COUNTRY_EXTRA_TERMS` - Per-country localized terms (7 countries: BR, MX, ID, RU, TH, TR, CO)
+- `CURRENT_REGIONS` = `REGIONS_FULL` (20 regions across 5 groups, CO replaced CN since Mar 6)
 - `COUNTRY_GROUPS` - 5 groups of 4 regions each, staggered ~2h25min apart
 - `TIMEFRAME` = `"now 4-H"` — Base terms use 4-hour window
 - `TIMEFRAME_EXTRA_TERMS` = `"now 1-d"` — Localized terms use 24-hour window (more volume)
@@ -90,7 +90,7 @@ Runs 10 times daily (5 groups × 2 runs each), staggered ~2h25min apart:
 - 00:00, 12:00 UTC → group_1 (WW, IN, US, BR)
 - 02:25, 14:25 UTC → group_2 (ID, MX, PH, GB)
 - 04:50, 16:50 UTC → group_3 (AU, VN, DE, RU)
-- 07:15, 19:15 UTC → group_4 (TH, FR, IT, CN)
+- 07:15, 19:15 UTC → group_4 (TH, FR, IT, CO)
 - 09:40, 21:40 UTC → group_5 (JP, TR, RO, NG)
 
 Group detection uses minute-based ranges (TOTAL_MIN) to tolerate GitHub Actions scheduling delays.
@@ -98,7 +98,7 @@ Group detection uses minute-based ranges (TOTAL_MIN) to tolerate GitHub Actions 
 On failure: Creates GitHub Issue automatically (with dedup, max 1 per 24h) + optional Slack notification.
 On success: Auto-closes any open `scraping-failure` issues.
 
-### Current Status (2026-02-20)
+### Current Status (2026-03-06)
 
 The system is stable with 100% success rate since Feb 3 (Run #83 onward, 0 failures).
 All data exports correctly to Google Sheets.
@@ -107,12 +107,14 @@ All data exports correctly to Google Sheets.
 - Feb 13: Territory scaling (12→20 regions, 3→5 groups)
 - Feb 18: Localized keywords per country (12 countries with extra terms in local language)
 - Feb 20: Dual timeframe — localized terms switched to 24h window (`now 1-d`) for better data yield
+- Mar 6: Removed 6 dead localized keywords (FR, IT, DE, JP, CN, RO), replaced CN with CO (Colombia)
 
-**Localized keywords results (Feb 18-20 analysis):**
-- `apk indir` (TR): 32 rows in 3 days — works well on 4h timeframe, kept as-is
-- `baixar apk` (BR): 4 rows — marginal, switched to 24h
-- Other 10 localized terms: 0 rows on 4h timeframe, switched to 24h to test wider window
-- Base English terms generate 98.9% of all data
+**Feb 23 – Mar 6 analysis (100 runs, 99 successes):**
+- Average: 1,375 rows/day (+5.1% vs pre-localization baseline of ~1,308/day)
+- Working localized keywords: `apk indir` (TR, 22.9/day), `descargar apk` (MX, 14.6/day), `скачать apk` (RU, 10.0/day), `baixar apk` (BR, 4.4/day), `unduh apk` (ID, 1.3/day), `ดาวน์โหลด apk` (TH, 0.2/day)
+- Dead keywords removed: `télécharger apk` (FR), `scaricare apk` (IT), `apk herunterladen` (DE), `apkダウンロード` (JP), `下载apk` (CN), `descărcare apk` (RO) — 0 results in 2+ weeks even with 24h timeframe
+- CN replaced with CO (Colombia): Google blocked in China, only ~3 rows/day. CO uses `descargar apk` (same as MX)
+- GB under investigation: ~26 rows/day, -41.6% vs baseline, no code issues found — likely natural volume ceiling for UK APK queries
 
 Topics extraction is disabled (PyTrends bug). Interest Over Time is disabled.
 Only Related Queries (Top + Rising) are active.

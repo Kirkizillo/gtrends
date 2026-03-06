@@ -8,7 +8,7 @@ on:
     - cron: '0 0,12 * * *'    # group_1: WW, IN, US, BR
     - cron: '25 2,14 * * *'   # group_2: ID, MX, PH, GB
     - cron: '50 4,16 * * *'   # group_3: AU, VN, DE, RU
-    - cron: '15 7,19 * * *'   # group_4: TH, FR, IT, CN
+    - cron: '15 7,19 * * *'   # group_4: TH, FR, IT, CO
     - cron: '40 9,21 * * *'   # group_5: JP, TR, RO, NG
 
   # Permitir ejecución manual desde GitHub
