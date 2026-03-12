@@ -34,7 +34,7 @@ SCOPES = [
 ]
 
 SHEETS_TO_MIGRATE = ["Related_Queries_Top", "Related_Queries_Rising"]
-BATCH_SIZE = 500  # Insertar en lotes para no sobrecargar
+BATCH_SIZE = 10000  # Insertar en lotes grandes — sync() por lote es el cuello de botella
 
 
 def connect_sheets():
