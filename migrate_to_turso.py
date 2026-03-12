@@ -64,10 +64,11 @@ def read_sheet_data(spreadsheet, sheet_name: str) -> list:
 
     logger.info(f"  {sheet_name}: {len(rows)} filas encontradas")
 
-    # Mapear columnas
+    # Mapear columnas — data_type se infiere del nombre de la hoja
+    data_type = "queries_rising" if "rising" in sheet_name.lower() else "queries_top"
     data = []
     for row in rows:
-        if len(row) < 7:
+        if len(row) < 6:
             continue
         try:
             item = TrendData(
@@ -75,18 +76,14 @@ def read_sheet_data(spreadsheet, sheet_name: str) -> list:
                 term=row[1],
                 country_code=row[2],
                 country_name=row[3],
+                data_type=data_type,
                 title=row[4],
                 value=row[5],
                 link=row[6] if len(row) > 6 else ""
             )
-            # Inferir data_type del nombre de la hoja
-            if "rising" in sheet_name.lower():
-                item.data_type = "queries_rising"
-            else:
-                item.data_type = "queries_top"
             data.append(item)
         except Exception as e:
-            logger.debug(f"  Fila ignorada: {e}")
+            logger.warning(f"  Fila ignorada: {e}")
 
     return data
 
