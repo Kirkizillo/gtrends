@@ -1,0 +1,65 @@
+name: Migrate to Turso
+
+on:
+  # Solo ejecución manual desde GitHub
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run (solo mostrar cuántos registros, no migrar)'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Create credentials file
+        env:
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+        run: |
+          echo "$GOOGLE_CREDENTIALS" > credentials.json
+
+      - name: Create .env file
+        env:
+          GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
+          TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+          TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+        run: |
+          echo "GOOGLE_SHEET_ID=$GOOGLE_SHEET_ID" > .env
+          echo "GOOGLE_CREDENTIALS_PATH=credentials.json" >> .env
+          echo "TURSO_DATABASE_URL=$TURSO_DATABASE_URL" >> .env
+          echo "TURSO_AUTH_TOKEN=$TURSO_AUTH_TOKEN" >> .env
+
+      - name: Run migration
+        run: |
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            python migrate_to_turso.py --dry-run
+          else
+            python migrate_to_turso.py
+          fi
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: migration-logs-${{ github.run_number }}
+          path: logs/
+          retention-days: 30

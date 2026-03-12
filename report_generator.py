@@ -109,6 +109,14 @@ class ReportItem:
     versions: List[str] = field(default_factory=list)  # Versiones específicas detectadas
     needs_review: bool = False  # Si requiere revisión especial (watchlist)
     review_reason: str = ""  # Razón por la que necesita revisión
+    # Novelty detection
+    novelty: str = ""  # 'nueva' | 'resurgente' | 'conocida' | ''
+    first_seen: Optional[str] = None  # Fecha primera vez vista
+    # Trend velocity
+    velocity: str = ""  # 'acelerando' | 'estable' | 'decayendo' | ''
+    velocity_change: float = 0.0  # % cambio 24h
+    # Cross-region
+    spread_score: int = 0  # Número de países únicos
 
     def __post_init__(self):
         # Asegurar que las listas no tengan duplicados
@@ -116,6 +124,7 @@ class ReportItem:
         self.countries = list(set(self.countries))
         self.links = list(set(self.links))
         self.versions = list(set(self.versions))
+        self.spread_score = len(self.countries)
 
 
 @dataclass
@@ -131,6 +140,14 @@ class ContentReport:
     generic_terms: List[ReportItem] = field(default_factory=list)  # Términos genéricos ignorados
     technical_terms: List[ReportItem] = field(default_factory=list)  # Términos técnicos ignorados
 
+    # Nuevas secciones
+    new_apps: List[ReportItem] = field(default_factory=list)  # Apps nunca vistas antes
+    global_trends: List[ReportItem] = field(default_factory=list)  # Apps en 3+ países
+    accelerating: List[ReportItem] = field(default_factory=list)  # Apps acelerando
+
+    # Resumen ejecutivo
+    executive_summary: List[str] = field(default_factory=list)
+
     # Estadísticas
     total_items_processed: int = 0
     total_unique_terms: int = 0
@@ -141,7 +158,13 @@ class ReportGenerator:
     Genera informes procesados a partir de datos de Google Trends.
     """
 
-    def __init__(self):
+    def __init__(self, db=None):
+        """
+        Args:
+            db: TrendsDatabase instance (opcional). Si se proporciona, habilita
+                novelty detection, trend velocity y enriquecimiento de datos.
+        """
+        self.db = db
         self.generic_terms = GENERIC_TERMS
         self.generic_patterns = [re.compile(p, re.IGNORECASE) for p in GENERIC_PATTERNS]
         self.technical_patterns = [re.compile(p, re.IGNORECASE) for p in TECHNICAL_PATTERNS]
@@ -546,6 +569,23 @@ class ReportGenerator:
         generic_terms.sort(key=sort_key)
         technical_terms.sort(key=sort_key)
 
+        # Enriquecer con datos de Turso si está disponible
+        all_actionable = potential_apps + watchlist_apps
+        if self.db and self.db.is_connected and all_actionable:
+            self._enrich_with_db(all_actionable)
+
+        # Clasificar secciones especiales
+        new_apps = [item for item in potential_apps if item.novelty == 'nueva']
+        global_trends = [item for item in potential_apps if item.spread_score >= 3]
+        global_trends.sort(key=lambda x: -x.spread_score)
+        accelerating = [item for item in potential_apps if item.velocity == 'acelerando']
+        accelerating.sort(key=lambda x: -x.velocity_change)
+
+        # Generar resumen ejecutivo
+        executive_summary = self._generate_executive_summary(
+            potential_apps, watchlist_apps, new_apps, global_trends, accelerating
+        )
+
         return ContentReport(
             timestamp=datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
             group=group,
@@ -554,11 +594,72 @@ class ReportGenerator:
             watchlist_apps=watchlist_apps,
             generic_terms=generic_terms,
             technical_terms=technical_terms,
+            new_apps=new_apps,
+            global_trends=global_trends,
+            accelerating=accelerating,
+            executive_summary=executive_summary,
             total_items_processed=len(data),
             total_unique_terms=len(base_grouped)
         )
 
-    def _format_app_line(self, item: ReportItem, include_versions: bool = True) -> str:
+    def _enrich_with_db(self, items: List[ReportItem]):
+        """Enriquece ReportItems con novelty y velocity desde Turso."""
+        for item in items:
+            try:
+                # Novelty detection
+                status, first_seen = self.db.get_novelty_status(item.name)
+                item.novelty = status
+                item.first_seen = first_seen
+
+                # Trend velocity
+                velocity = self.db.get_velocity(item.name)
+                item.velocity = velocity.get('trend', '')
+                item.velocity_change = velocity.get('change_24h', 0.0)
+            except Exception as e:
+                logger.debug(f"Error enriqueciendo '{item.name}': {e}")
+
+    def _generate_executive_summary(
+        self,
+        potential_apps: List[ReportItem],
+        watchlist_apps: List[ReportItem],
+        new_apps: List[ReportItem],
+        global_trends: List[ReportItem],
+        accelerating: List[ReportItem]
+    ) -> List[str]:
+        """Genera 3-5 bullets de resumen ejecutivo."""
+        summary = []
+
+        # Apps nuevas
+        if new_apps:
+            names = [a.name for a in new_apps[:3]]
+            extra = f" (+{len(new_apps) - 3} mas)" if len(new_apps) > 3 else ""
+            summary.append(f"Se detectaron {len(new_apps)} apps nuevas: {', '.join(names)}{extra}")
+
+        # Tendencias globales
+        if global_trends:
+            top = global_trends[0]
+            summary.append(
+                f"{top.name} trending en {top.spread_score} paises simultaneamente"
+            )
+
+        # Apps acelerando
+        if accelerating:
+            top = accelerating[0]
+            summary.append(
+                f"{top.name} esta acelerando ({'+' if top.velocity_change > 0 else ''}{top.velocity_change}% vs ayer)"
+            )
+
+        # Watchlist
+        if watchlist_apps:
+            summary.append(f"Watchlist: {len(watchlist_apps)} items requieren revision")
+
+        # Total si no hay highlights
+        if not summary:
+            summary.append(f"{len(potential_apps)} apps detectadas, sin novedades destacadas")
+
+        return summary
+
+    def _format_app_line(self, item: ReportItem, include_versions: bool = True, show_novelty: bool = False) -> str:
         """Formatea una línea de app para Slack."""
         # Emoji según tipo
         if item.is_rising:
@@ -567,6 +668,13 @@ class ReportGenerator:
         else:
             emoji = "📈"
             type_label = "Top"
+
+        # Badge de novedad
+        novelty_badge = ""
+        if show_novelty and item.novelty == 'nueva':
+            novelty_badge = "🆕 "
+        elif show_novelty and item.novelty == 'resurgente':
+            novelty_badge = "🔄 "
 
         # Países (abreviar si son muchos)
         countries_unique = list(set(item.countries))
@@ -583,7 +691,14 @@ class ReportGenerator:
         else:
             value_str = f"Score: {item.max_value}"
 
-        line = f"• {emoji} *{item.name}* - {type_label} ({countries_str}) [{value_str}]"
+        # Velocidad
+        velocity_str = ""
+        if item.velocity == 'acelerando':
+            velocity_str = " ↑"
+        elif item.velocity == 'decayendo':
+            velocity_str = " ↓"
+
+        line = f"• {novelty_badge}{emoji} *{item.name}* - {type_label} ({countries_str}) [{value_str}]{velocity_str}"
 
         # Añadir versiones si existen
         if include_versions and item.versions:
@@ -612,6 +727,41 @@ class ReportGenerator:
             header += f"\nRegiones: {', '.join(report.regions)}"
         lines.append(header)
         lines.append("")
+
+        # Resumen ejecutivo
+        if report.executive_summary:
+            lines.append("📋 *RESUMEN EJECUTIVO*")
+            for bullet in report.executive_summary:
+                lines.append(f"  • {bullet}")
+            lines.append("")
+
+        # Apps nuevas (nunca vistas)
+        if report.new_apps:
+            lines.append(f"✨ *APPS NUEVAS ({len(report.new_apps)})*")
+            lines.append("━" * 30)
+            for item in report.new_apps[:10]:
+                lines.append(self._format_app_line(item, show_novelty=True))
+            if len(report.new_apps) > 10:
+                lines.append(f"  _...y {len(report.new_apps) - 10} más_")
+            lines.append("")
+
+        # Tendencias globales (3+ países)
+        if report.global_trends:
+            lines.append(f"🌍 *TENDENCIAS GLOBALES ({len(report.global_trends)})*")
+            lines.append("━" * 30)
+            for item in report.global_trends[:10]:
+                countries_str = ', '.join(list(set(item.countries)))
+                lines.append(f"• *{item.name}* - {item.spread_score} países ({countries_str})")
+            lines.append("")
+
+        # Apps acelerando
+        if report.accelerating:
+            lines.append(f"⚡ *ACELERANDO ({len(report.accelerating)})*")
+            lines.append("━" * 30)
+            for item in report.accelerating[:5]:
+                sign = '+' if item.velocity_change > 0 else ''
+                lines.append(f"• *{item.name}* - {sign}{item.velocity_change}% vs ayer")
+            lines.append("")
 
         # Apps potenciales (normales)
         if report.potential_apps:
@@ -745,6 +895,35 @@ class ReportGenerator:
         else:
             rows.append([f"Regiones: {', '.join(report.regions)}", "", "", "", "", ""])
         rows.append(["", "", "", "", "", ""])  # Línea vacía
+
+        # Resumen ejecutivo
+        if report.executive_summary:
+            rows.append(["📋 RESUMEN EJECUTIVO", "", "", "", "", ""])
+            for bullet in report.executive_summary:
+                rows.append([f"  • {bullet}", "", "", "", "", ""])
+            rows.append(["", "", "", "", "", ""])
+
+        # Apps nuevas
+        if report.new_apps:
+            rows.append([f"✨ APPS NUEVAS ({len(report.new_apps)})", "", "", "", "", ""])
+            rows.append(["App", "Tipo", "Países", "Score", "Novedad", "Link"])
+            for item in report.new_apps:
+                tipo = "🔥 Rising" if item.is_rising else "📈 Top"
+                countries = ', '.join(list(set(item.countries))[:5])
+                link = item.links[0] if item.links else ""
+                rows.append([item.name, tipo, countries, item.max_value, "🆕 Nueva", link])
+            rows.append(["", "", "", "", "", ""])
+
+        # Tendencias globales
+        if report.global_trends:
+            rows.append([f"🌍 TENDENCIAS GLOBALES ({len(report.global_trends)})", "", "", "", "", ""])
+            rows.append(["App", "Países", "Spread", "Score", "Velocidad", "Link"])
+            for item in report.global_trends:
+                countries = ', '.join(list(set(item.countries)))
+                vel = item.velocity if item.velocity else ""
+                link = item.links[0] if item.links else ""
+                rows.append([item.name, countries, str(item.spread_score), item.max_value, vel, link])
+            rows.append(["", "", "", "", "", ""])
 
         # Sección de apps detectadas
         if report.potential_apps:

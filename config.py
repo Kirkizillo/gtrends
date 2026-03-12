@@ -80,6 +80,13 @@ MAX_BACKOFF_SECONDS = 180
 # Dejar vacío para no usar proxies
 PROXIES = os.getenv("PROXIES", "").split(",") if os.getenv("PROXIES") else []
 
+# =============================================================================
+# Configuración de Turso (SQLite cloud)
+# =============================================================================
+
+TURSO_DATABASE_URL = os.getenv("TURSO_DATABASE_URL", "")
+TURSO_AUTH_TOKEN = os.getenv("TURSO_AUTH_TOKEN", "")
+
 # Distribución de requests
 # Divide los países en grupos para ejecutar en diferentes horarios
 # 20 regiones / 5 grupos = 4 regiones por grupo

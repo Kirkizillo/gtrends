@@ -12,6 +12,9 @@ python-dotenv>=1.0.0
 # Utilidades
 pandas>=2.0.0
 
+# Base de datos Turso (SQLite cloud)
+libsql>=0.1.11
+
 # Testing
 pytest>=7.0.0
 pytest-mock>=3.10.0

@@ -10,6 +10,7 @@ on:
     - cron: '50 4,16 * * *'   # group_3: AU, VN, DE, RU
     - cron: '15 7,19 * * *'   # group_4: TH, FR, IT, CO
     - cron: '40 9,21 * * *'   # group_5: JP, TR, RO, NG
+    - cron: '0 23 * * *'      # digest: consolidado diario
 
   # Permitir ejecución manual desde GitHub
   workflow_dispatch:
@@ -71,8 +72,10 @@ jobs:
               echo "group=group_3" >> $GITHUB_OUTPUT     # 16:50–19:14 UTC
             elif [ "$TOTAL_MIN" -ge 1155 ] && [ "$TOTAL_MIN" -lt 1300 ]; then
               echo "group=group_4" >> $GITHUB_OUTPUT     # 19:15–21:39 UTC
+            elif [ "$TOTAL_MIN" -ge 1360 ]; then
+              echo "group=digest" >> $GITHUB_OUTPUT       # 22:40–23:59 UTC (digest diario)
             else
-              echo "group=group_5" >> $GITHUB_OUTPUT     # 21:40–23:59 UTC
+              echo "group=group_5" >> $GITHUB_OUTPUT     # 21:40–22:39 UTC
             fi
           fi
 
@@ -104,15 +107,24 @@ jobs:
         env:
           GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
           PROXIES: ${{ secrets.PROXIES }}
+          TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+          TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
         run: |
           echo "GOOGLE_SHEET_ID=$GOOGLE_SHEET_ID" > .env
           echo "GOOGLE_CREDENTIALS_PATH=credentials.json" >> .env
           echo "PROXIES=$PROXIES" >> .env
+          echo "TURSO_DATABASE_URL=$TURSO_DATABASE_URL" >> .env
+          echo "TURSO_AUTH_TOKEN=$TURSO_AUTH_TOKEN" >> .env
 
       - name: Run Google Trends Monitor
+        env:
+          TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+          TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
         run: |
           GROUP="${{ needs.determine-group.outputs.group }}"
-          if [ -n "$GROUP" ]; then
+          if [ "$GROUP" = "digest" ]; then
+            python digest.py
+          elif [ -n "$GROUP" ]; then
             python main.py --group $GROUP
           else
             python main.py

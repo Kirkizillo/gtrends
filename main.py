@@ -20,6 +20,8 @@ from trends_scraper import TrendsScraper
 from google_sheets_exporter import GoogleSheetsExporter
 from backup import save_backup, cleanup_old_backups
 from report_generator import ReportGenerator
+from database import TrendsDatabase
+from html_report import save_html_report
 
 
 def setup_logging():
@@ -237,13 +239,19 @@ def run_monitor(logger, include_topics: bool = False, include_interest: bool = F
     logger.info(f"Términos: {terms}")
     logger.info(f"Regiones: {list(regions.keys())}")
 
-    # Inicializar scraper y exporter
+    # Inicializar scraper, exporter y database
     scraper = TrendsScraper()
     exporter = GoogleSheetsExporter()
+    db = TrendsDatabase()
 
     if not exporter.connect():
         logger.error("No se pudo conectar a Google Sheets")
         sys.exit(1)
+
+    # Turso es opcional — si no está configurado, el sistema sigue funcionando
+    db_connected = db.connect()
+    if not db_connected:
+        logger.warning("Turso no disponible — continuando sin base de datos")
 
     # Contadores totales
     total_scraped = 0
@@ -341,6 +349,13 @@ def run_monitor(logger, include_topics: bool = False, include_interest: bool = F
                     # Guardar backup de emergencia
                     save_backup(batch_data, f"emergency_{term}_{geo}")
 
+                # Insertar en Turso (no bloquea si falla)
+                if db_connected:
+                    try:
+                        db.insert_trends(batch_data, run_group=group)
+                    except Exception as e:
+                        logger.warning(f"  Turso insert falló: {e}")
+
     # Resumen final
     logger.info(f"\n{'='*50}")
     logger.info("RESUMEN FINAL")
@@ -407,8 +422,14 @@ def run_monitor(logger, include_topics: bool = False, include_interest: bool = F
         logger.info("INFORME PARA CONTENIDOS")
         logger.info("="*50)
 
-        report_generator = ReportGenerator()
+        report_generator = ReportGenerator(db=db if db_connected else None)
         report = report_generator.generate(all_data, group=group)
+
+        # Mostrar resumen ejecutivo
+        if report.executive_summary:
+            logger.info("\n📋 RESUMEN EJECUTIVO:")
+            for line in report.executive_summary:
+                logger.info(f"  • {line}")
 
         # Mostrar informe en formato plain en los logs
         logger.info("\n" + report_generator.format_plain(report))
@@ -426,6 +447,13 @@ def run_monitor(logger, include_topics: bool = False, include_interest: bool = F
             logger.info(f"\nInforme Slack guardado en: {report_path}")
         except Exception as e:
             logger.warning(f"No se pudo guardar informe: {e}")
+
+        # Generar informe HTML
+        try:
+            html_path = save_html_report(report)
+            logger.info(f"Informe HTML guardado en: {html_path}")
+        except Exception as e:
+            logger.warning(f"No se pudo generar informe HTML: {e}")
 
         # Exportar informe a pestaña individual en Google Sheets (formato rico)
         if report.potential_apps or report.watchlist_apps:
@@ -489,6 +517,15 @@ def run_monitor(logger, include_topics: bool = False, include_interest: bool = F
         logger.info(f"Métricas guardadas en: {metrics_path}")
     except Exception as e:
         logger.warning(f"No se pudieron guardar métricas: {e}")
+
+    # Guardar métricas en Turso
+    if db_connected:
+        try:
+            db.insert_run_metrics(metrics)
+        except Exception as e:
+            logger.warning(f"No se pudieron guardar métricas en Turso: {e}")
+        finally:
+            db.close()
 
     logger.info("\n=== Monitoreo completado ===")
 

@@ -11,6 +11,9 @@ logs/
 # Backups
 backups/
 
+# Turso local replica
+data/
+
 # Python
 __pycache__/
 *.py[cod]
