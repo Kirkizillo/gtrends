@@ -123,19 +123,22 @@ def migrate(dry_run: bool = False):
         sys.exit(1)
     logger.info("✓ Conectado a Turso\n")
 
-    # Fase 1: INSERT directo en trends (sin apps_seen, sin sync entre lotes)
+    # Fase 1: INSERT en trends usando executemany (mucho más rápido que execute por fila)
     logger.info(f"Fase 1/3: Insertando {len(all_data)} filas en trends...")
     total = 0
     for i in range(0, len(all_data), BATCH_SIZE):
         batch = all_data[i:i + BATCH_SIZE]
-        for item in batch:
-            db.conn.execute(
-                """INSERT INTO trends
-                   (timestamp, term, country_code, country_name, data_type, title, value, link, run_group)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (item.timestamp, item.term, item.country_code, item.country_name,
-                 item.data_type, item.title, str(item.value), item.link, "migration")
-            )
+        rows = [
+            (item.timestamp, item.term, item.country_code, item.country_name,
+             item.data_type, item.title, str(item.value), item.link, "migration")
+            for item in batch
+        ]
+        db.conn.executemany(
+            """INSERT INTO trends
+               (timestamp, term, country_code, country_name, data_type, title, value, link, run_group)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            rows
+        )
         db.conn.commit()
         total += len(batch)
         logger.info(f"  {total}/{len(all_data)} ({total * 100 // len(all_data)}%)")
