@@ -93,7 +93,7 @@ Runs 10 times daily (5 groups × 2 runs each), staggered ~2h25min apart:
 - 07:15, 19:15 UTC → group_4 (TH, FR, IT, CO)
 - 09:40, 21:40 UTC → group_5 (JP, TR, RO, NG)
 
-Group detection uses minute-based ranges (TOTAL_MIN) to tolerate GitHub Actions scheduling delays.
+Group detection uses `github.event.schedule` for deterministic cron-to-group mapping (immune to GitHub Actions scheduling delays).
 
 On failure: Creates GitHub Issue automatically (with dedup, max 1 per 24h) + optional Slack notification.
 On success: Auto-closes any open `scraping-failure` issues.

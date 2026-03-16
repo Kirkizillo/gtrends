@@ -34,7 +34,7 @@ permissions:
   issues: write
 
 jobs:
-  # Determinar qué grupo ejecutar basado en la hora
+  # Determinar qué grupo ejecutar basado en github.event.schedule
   determine-group:
     runs-on: ubuntu-latest
     outputs:
@@ -46,37 +46,19 @@ jobs:
           if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
             echo "group=${{ github.event.inputs.group }}" >> $GITHUB_OUTPUT
           else
-            # Rangos de hora para tolerar retrasos de GitHub Actions
-            # 10 slots de ~2h25min distribuidos en 24h
-            # Crons: g1=0,12h  g2=2:25,14:25h  g3=4:50,16:50h  g4=7:15,19:15h  g5=9:40,21:40h
-            HOUR=$(date -u +%H)
-            MIN=$(date -u +%M)
-            # Convertir a minutos desde medianoche para comparaciones más precisas
-            TOTAL_MIN=$(( 10#$HOUR * 60 + 10#$MIN ))
-
-            if [ "$TOTAL_MIN" -ge 0 ] && [ "$TOTAL_MIN" -lt 145 ]; then
-              echo "group=group_1" >> $GITHUB_OUTPUT     # 00:00–02:24 UTC
-            elif [ "$TOTAL_MIN" -ge 145 ] && [ "$TOTAL_MIN" -lt 290 ]; then
-              echo "group=group_2" >> $GITHUB_OUTPUT     # 02:25–04:49 UTC
-            elif [ "$TOTAL_MIN" -ge 290 ] && [ "$TOTAL_MIN" -lt 435 ]; then
-              echo "group=group_3" >> $GITHUB_OUTPUT     # 04:50–07:14 UTC
-            elif [ "$TOTAL_MIN" -ge 435 ] && [ "$TOTAL_MIN" -lt 580 ]; then
-              echo "group=group_4" >> $GITHUB_OUTPUT     # 07:15–09:39 UTC
-            elif [ "$TOTAL_MIN" -ge 580 ] && [ "$TOTAL_MIN" -lt 720 ]; then
-              echo "group=group_5" >> $GITHUB_OUTPUT     # 09:40–11:59 UTC
-            elif [ "$TOTAL_MIN" -ge 720 ] && [ "$TOTAL_MIN" -lt 865 ]; then
-              echo "group=group_1" >> $GITHUB_OUTPUT     # 12:00–14:24 UTC
-            elif [ "$TOTAL_MIN" -ge 865 ] && [ "$TOTAL_MIN" -lt 1010 ]; then
-              echo "group=group_2" >> $GITHUB_OUTPUT     # 14:25–16:49 UTC
-            elif [ "$TOTAL_MIN" -ge 1010 ] && [ "$TOTAL_MIN" -lt 1155 ]; then
-              echo "group=group_3" >> $GITHUB_OUTPUT     # 16:50–19:14 UTC
-            elif [ "$TOTAL_MIN" -ge 1155 ] && [ "$TOTAL_MIN" -lt 1300 ]; then
-              echo "group=group_4" >> $GITHUB_OUTPUT     # 19:15–21:39 UTC
-            elif [ "$TOTAL_MIN" -ge 1360 ]; then
-              echo "group=digest" >> $GITHUB_OUTPUT       # 22:40–23:59 UTC (digest diario)
-            else
-              echo "group=group_5" >> $GITHUB_OUTPUT     # 21:40–22:39 UTC
-            fi
+            CRON="${{ github.event.schedule }}"
+            case "$CRON" in
+              "0 0,12 * * *")    echo "group=group_1" >> $GITHUB_OUTPUT ;;
+              "25 2,14 * * *")   echo "group=group_2" >> $GITHUB_OUTPUT ;;
+              "50 4,16 * * *")   echo "group=group_3" >> $GITHUB_OUTPUT ;;
+              "15 7,19 * * *")   echo "group=group_4" >> $GITHUB_OUTPUT ;;
+              "40 9,21 * * *")   echo "group=group_5" >> $GITHUB_OUTPUT ;;
+              "0 23 * * *")      echo "group=digest"   >> $GITHUB_OUTPUT ;;
+              *)
+                echo "::error::Unknown schedule trigger: '$CRON'"
+                exit 1
+                ;;
+            esac
           fi
 
   scrape-and-export:
