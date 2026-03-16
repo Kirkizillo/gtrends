@@ -6,6 +6,7 @@ accionables clasificando las apps/términos detectados.
 """
 import logging
 import re
+import unicodedata
 from datetime import datetime
 from typing import List, Dict, Optional, Tuple
 from dataclasses import dataclass, field
@@ -235,6 +236,10 @@ class ReportGenerator:
             Nombre base de la app
         """
         normalized = title.lower().strip()
+
+        # Remover acentos/diacríticos (consistente con database._normalize_title)
+        normalized = unicodedata.normalize('NFKD', normalized)
+        normalized = ''.join(c for c in normalized if not unicodedata.combining(c))
 
         # Remover sufijos de APK primero
         suffixes = [' apk', ' app', ' download', ' android', ' ios', ' for android', ' for ios']
@@ -573,6 +578,9 @@ class ReportGenerator:
         all_actionable = potential_apps + watchlist_apps
         if self.db and self.db.is_connected and all_actionable:
             self._enrich_with_db(all_actionable)
+            # Recalcular spread_score post-enrich (por si el enriquecimiento modificó countries)
+            for item in all_actionable:
+                item.spread_score = len(set(item.countries))
 
         # Clasificar secciones especiales
         new_apps = [item for item in potential_apps if item.novelty == 'nueva']
@@ -616,7 +624,7 @@ class ReportGenerator:
                 item.velocity = velocity.get('trend', '')
                 item.velocity_change = velocity.get('change_24h', 0.0)
             except Exception as e:
-                logger.debug(f"Error enriqueciendo '{item.name}': {e}")
+                logger.warning(f"Error enriqueciendo '{item.name}': {e}")
 
     def _generate_executive_summary(
         self,

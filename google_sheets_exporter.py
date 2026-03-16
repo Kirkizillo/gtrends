@@ -8,7 +8,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 
 import config
-from datetime import datetime
+from datetime import datetime, timedelta
 from trends_scraper import TrendData
 
 logger = logging.getLogger(__name__)
@@ -265,11 +265,37 @@ class GoogleSheetsExporter:
             worksheet.update_index(2)
 
             logger.info(f"Informe exportado a pestaña '{sheet_name}' ({len(rows)} filas)")
+
+            # Limpiar pestañas de informe antiguas
+            self._cleanup_old_report_tabs()
+
             return sheet_name
 
         except Exception as e:
             logger.error(f"Error creando pestaña de informe: {e}")
             return None
+
+    def _cleanup_old_report_tabs(self, keep_days: int = 7):
+        """
+        Elimina pestañas de informe (Inf_*) con más de keep_days días.
+        Se ejecuta después de cada export para mantener el spreadsheet limpio.
+        """
+        cutoff = (datetime.now() - timedelta(days=keep_days)).strftime("%Y-%m-%d")
+        deleted = 0
+
+        try:
+            for ws in self.spreadsheet.worksheets():
+                # Solo tocar pestañas de informe (formato: Inf_YYYY-MM-DD_HH:MM)
+                if ws.title.startswith("Inf_") and len(ws.title) >= 14:
+                    tab_date = ws.title[4:14]  # Extraer YYYY-MM-DD
+                    if tab_date < cutoff:
+                        self.spreadsheet.del_worksheet(ws)
+                        deleted += 1
+
+            if deleted:
+                logger.info(f"Cleanup: {deleted} pestañas de informe antiguas eliminadas (>{keep_days} días)")
+        except Exception as e:
+            logger.warning(f"Error en cleanup de pestañas: {e}")
 
 
 # Para pruebas directas

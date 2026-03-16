@@ -332,9 +332,9 @@ class TrendsDatabase:
             return {'trend': 'desconocido', 'last_24h': 0, 'prev_24h': 0,
                     'last_7d': 0, 'prev_7d': 0, 'change_24h': 0.0}
 
-        # Buscar por título normalizado (sin apk, download, etc.)
-        # Usamos LIKE para capturar variaciones
-        like_pattern = f"%{normalized}%"
+        # Buscar por título normalizado — matchea al inicio para evitar falsos positivos
+        # (ej: "instagram" no debe matchear "instant messenger instagram")
+        like_pattern = f"{normalized}%"
 
         # Apariciones últimas 24h
         last_24h = self.conn.execute(
@@ -503,6 +503,163 @@ class TrendsDatabase:
             'today': today,
             'yesterday': yesterday,
             'change_pct': round(change, 1)
+        }
+
+    # =========================================================================
+    # Consultas para informe semanal
+    # =========================================================================
+
+    def get_weekly_top_by_country(self, days: int = 7, limit: int = 10) -> dict:
+        """
+        Top apps por país en los últimos N días.
+
+        Returns:
+            Dict de {country_code: [{title, count, data_types}]}
+        """
+        if not self.is_connected:
+            return {}
+
+        rows = self.conn.execute(
+            """SELECT country_code, title, COUNT(*) as cnt,
+                      GROUP_CONCAT(DISTINCT data_type) as types
+               FROM trends
+               WHERE timestamp >= datetime('now', ? || ' days')
+               GROUP BY country_code, lower(title)
+               ORDER BY country_code, cnt DESC""",
+            (str(-days),)
+        ).fetchall()
+
+        result = {}
+        for row in rows:
+            cc = row[0]
+            if cc not in result:
+                result[cc] = []
+            if len(result[cc]) < limit:
+                result[cc].append({
+                    'title': row[1],
+                    'count': row[2],
+                    'data_types': row[3].split(',') if row[3] else [],
+                })
+        return result
+
+    def get_weekly_new_apps(self, days: int = 7) -> list:
+        """
+        Apps vistas por primera vez en los últimos N días.
+
+        Returns:
+            Lista de dicts con {title_normalized, display_name, first_seen, countries}
+        """
+        if not self.is_connected:
+            return []
+
+        rows = self.conn.execute(
+            """SELECT title_normalized, display_name, first_seen, countries_json
+               FROM apps_seen
+               WHERE first_seen >= datetime('now', ? || ' days')
+               ORDER BY first_seen DESC""",
+            (str(-days),)
+        ).fetchall()
+
+        return [
+            {
+                'title_normalized': row[0],
+                'display_name': row[1],
+                'first_seen': row[2],
+                'countries': json.loads(row[3]) if row[3] else [],
+            }
+            for row in rows
+        ]
+
+    def get_weekly_cross_market(self, days: int = 7, min_countries: int = 3) -> list:
+        """
+        Apps que aparecieron en 3+ países en los últimos N días.
+
+        Returns:
+            Lista de dicts con {title, countries, count, data_types}
+        """
+        if not self.is_connected:
+            return []
+
+        rows = self.conn.execute(
+            """SELECT title, COUNT(*) as cnt,
+                      GROUP_CONCAT(DISTINCT country_code) as countries,
+                      GROUP_CONCAT(DISTINCT data_type) as types,
+                      COUNT(DISTINCT country_code) as n_countries
+               FROM trends
+               WHERE timestamp >= datetime('now', ? || ' days')
+               GROUP BY lower(title)
+               HAVING n_countries >= ?
+               ORDER BY n_countries DESC, cnt DESC""",
+            (str(-days), min_countries)
+        ).fetchall()
+
+        return [
+            {
+                'title': row[0],
+                'count': row[1],
+                'countries': row[2].split(',') if row[2] else [],
+                'data_types': row[3].split(',') if row[3] else [],
+                'n_countries': row[4],
+            }
+            for row in rows
+        ]
+
+    def get_weekly_comparison(self) -> dict:
+        """
+        Compara volumen de esta semana vs la anterior.
+
+        Returns:
+            Dict con {this_week, last_week, change_pct, this_week_new, last_week_new,
+                       region_activity: [{country_code, this_week, last_week}]}
+        """
+        if not self.is_connected:
+            return {'this_week': 0, 'last_week': 0, 'change_pct': 0.0,
+                    'this_week_new': 0, 'last_week_new': 0, 'region_activity': []}
+
+        this_week = self.conn.execute(
+            "SELECT COUNT(*) FROM trends WHERE timestamp >= datetime('now', '-7 days')"
+        ).fetchone()[0]
+
+        last_week = self.conn.execute(
+            """SELECT COUNT(*) FROM trends
+               WHERE timestamp >= datetime('now', '-14 days')
+               AND timestamp < datetime('now', '-7 days')"""
+        ).fetchone()[0]
+
+        this_week_new = self.conn.execute(
+            "SELECT COUNT(*) FROM apps_seen WHERE first_seen >= datetime('now', '-7 days')"
+        ).fetchone()[0]
+
+        last_week_new = self.conn.execute(
+            """SELECT COUNT(*) FROM apps_seen
+               WHERE first_seen >= datetime('now', '-14 days')
+               AND first_seen < datetime('now', '-7 days')"""
+        ).fetchone()[0]
+
+        # Actividad por región comparada
+        region_rows = self.conn.execute(
+            """SELECT country_code,
+                      SUM(CASE WHEN timestamp >= datetime('now', '-7 days') THEN 1 ELSE 0 END) as tw,
+                      SUM(CASE WHEN timestamp >= datetime('now', '-14 days')
+                                AND timestamp < datetime('now', '-7 days') THEN 1 ELSE 0 END) as lw
+               FROM trends
+               WHERE timestamp >= datetime('now', '-14 days')
+               GROUP BY country_code
+               ORDER BY tw DESC"""
+        ).fetchall()
+
+        change = ((this_week - last_week) / last_week * 100) if last_week > 0 else 0.0
+
+        return {
+            'this_week': this_week,
+            'last_week': last_week,
+            'change_pct': round(change, 1),
+            'this_week_new': this_week_new,
+            'last_week_new': last_week_new,
+            'region_activity': [
+                {'country_code': r[0], 'this_week': r[1], 'last_week': r[2]}
+                for r in region_rows
+            ],
         }
 
     # =========================================================================

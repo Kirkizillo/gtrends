@@ -150,7 +150,7 @@ def _new_apps_section(apps: list) -> str:
 
 def _region_section(regions: list) -> str:
     if not regions:
-        return ""
+        return '<div class="card"><h2>Actividad por Region</h2><p class="empty">Sin datos de regiones</p></div>'
     max_count = regions[0]['count'] if regions else 1
     cells = ""
     for r in regions:
@@ -219,6 +219,7 @@ def _esc(text: str) -> str:
 def main():
     parser = argparse.ArgumentParser(description="Genera digest diario consolidado")
     parser.add_argument('--date', type=str, help="Fecha YYYY-MM-DD (default: hoy)")
+    parser.add_argument('--weekly', action='store_true', help="Forzar generacion de informe semanal")
     args = parser.parse_args()
 
     # Conectar a Turso
@@ -227,7 +228,7 @@ def main():
         logger.error("No se pudo conectar a Turso. Verifica credenciales.")
         sys.exit(1)
 
-    # Generar digest
+    # Generar digest diario
     logger.info("Generando digest diario...")
     html = generate_digest(db, date=args.date)
 
@@ -242,6 +243,18 @@ def main():
         f.write(html)
 
     logger.info(f"Digest guardado: {filepath}")
+
+    # Informe semanal: se genera los domingos o con --weekly
+    is_sunday = datetime.utcnow().weekday() == 6
+    if is_sunday or args.weekly:
+        logger.info("Generando informe semanal...")
+        try:
+            from weekly_report import save_weekly_report
+            weekly_path = save_weekly_report(db, days=7, output_dir=output_dir)
+            logger.info(f"Informe semanal guardado: {weekly_path}")
+        except Exception as e:
+            logger.error(f"Error generando informe semanal: {e}")
+
     db.close()
 
 
