@@ -112,7 +112,8 @@ class GoogleSheetsExporter:
             'topics_rising': config.SHEET_NAMES['topics_rising'],
             'interest_over_time': config.SHEET_NAMES['interest_over_time']
         }
-        return mapping.get(data_type, 'Unknown')
+        # Fallback: cualquier tipo definido en config.SHEET_NAMES (ej: trending_rss)
+        return mapping.get(data_type, config.SHEET_NAMES.get(data_type, 'Unknown'))
 
     def _trend_data_to_row(self, data: TrendData) -> List[str]:
         """

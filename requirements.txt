@@ -11,6 +11,7 @@ python-dotenv>=1.0.0
 
 # Utilidades
 pandas>=2.0.0
+requests>=2.31.0
 
 # Base de datos Turso (SQLite cloud)
 libsql>=0.1.11

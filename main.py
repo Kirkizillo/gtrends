@@ -22,6 +22,7 @@ from backup import save_backup, cleanup_old_backups
 from report_generator import ReportGenerator
 from database import TrendsDatabase
 from html_report import save_html_report
+from rss_trends import fetch_trending_rss, is_geo_supported
 
 
 def setup_logging():
@@ -355,6 +356,39 @@ def run_monitor(logger, include_topics: bool = False, include_interest: bool = F
                         db.insert_trends(batch_data, run_group=group)
                     except Exception as e:
                         logger.warning(f"  Turso insert falló: {e}")
+
+        # Señal complementaria: feed RSS "Trending Now" para esta región
+        # (feed oficial, sin rate limiting, una consulta secuencial por país)
+        if getattr(config, 'ENABLE_RSS_TRENDS', False):
+            if not is_geo_supported(geo):
+                logger.info(f"\nRSS Trending: región {geo} no soportada por el feed, se omite")
+            else:
+                logger.info(f"\nRSS Trending para {country_name} ({geo})")
+                rss_result = fetch_trending_rss(geo, country_name)
+                if rss_result.success and rss_result.data:
+                    total_scraped += len(rss_result.data)
+                    try:
+                        rss_counts = exporter.export(rss_result.data)
+                        for sheet, count in rss_counts.items():
+                            export_counts[sheet] = export_counts.get(sheet, 0) + count
+                            total_exported += count
+                        logger.info(f"  RSS exportado: {sum(rss_counts.values())} filas a Sheets")
+
+                        # Guardar backup incremental
+                        save_backup(rss_result.data, f"{group}_rss_{geo}" if group else f"rss_{geo}")
+
+                    except Exception as e:
+                        logger.error(f"  Error exportando RSS: {e}")
+                        save_backup(rss_result.data, f"emergency_rss_{geo}")
+
+                    # Insertar en Turso (no bloquea si falla)
+                    if db_connected:
+                        try:
+                            db.insert_trends(rss_result.data, run_group=group)
+                        except Exception as e:
+                            logger.warning(f"  Turso insert RSS falló: {e}")
+                else:
+                    logger.warning(f"  RSS fallido para {geo}: {rss_result.error_message}")
 
     # Resumen final
     logger.info(f"\n{'='*50}")

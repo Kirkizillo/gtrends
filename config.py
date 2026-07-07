@@ -117,8 +117,17 @@ SHEET_NAMES = {
     "topics_rising": "Related_Topics_Rising",
     "queries_top": "Related_Queries_Top",
     "queries_rising": "Related_Queries_Rising",
-    "interest_over_time": "Interest_Over_Time"
+    "interest_over_time": "Interest_Over_Time",
+    "trending_rss": "Trending_RSS"
 }
+
+# =============================================================================
+# Configuración del feed RSS "Trending Now"
+# =============================================================================
+
+# Señal complementaria gratuita: feed RSS oficial de Google Trends por país.
+# Se consulta una vez por región al final de su ciclo de scraping (ver rss_trends.py).
+ENABLE_RSS_TRENDS = True
 
 # =============================================================================
 # Configuración de Logging
