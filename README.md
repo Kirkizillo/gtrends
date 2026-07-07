@@ -7,7 +7,19 @@ Sistema automatizado para extraer datos de Google Trends y exportarlos a Google 
 <!-- DASHBOARD:START -->
 ## Dashboard
 
-Pendiente de primer digest. Este bloque se actualiza automáticamente cada día a las 23:00 UTC con el volumen del día, el top 5 de apps y el enlace al último digest en `reports/latest.md`.
+**Ultima actualizacion:** 2026-07-07 23:50 UTC
+
+**Volumen hoy:** 257 registros (+0.0% vs ayer)
+
+**Top 5 apps del dia:**
+
+1. **whatsapp apk** — 4x (MX, GB, NG)
+2. **phjoy app download apk** — 4x (PH)
+3. **arionplay app login download apk** — 4x (PH)
+4. **tiktok download apk** — 3x (ID, PH, NG)
+5. **roblox apk** — 3x (MX, TR)
+
+[Ver digest completo](reports/latest.md)
 <!-- DASHBOARD:END -->
 
 ## Características
