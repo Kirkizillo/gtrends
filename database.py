@@ -332,42 +332,47 @@ class TrendsDatabase:
             return {'trend': 'desconocido', 'last_24h': 0, 'prev_24h': 0,
                     'last_7d': 0, 'prev_7d': 0, 'change_24h': 0.0}
 
-        # Buscar por título normalizado — matchea al inicio para evitar falsos positivos
-        # (ej: "instagram" no debe matchear "instant messenger instagram")
-        like_pattern = f"{normalized}%"
+        # Buscar por título normalizado en trends (que almacena títulos raw).
+        # Usamos dos patrones: prefix ("capcut%") y word-boundary ("% capcut%")
+        # para capturar tanto "capcut pro apk" como "download capcut".
+        # El espacio en el segundo patrón evita falsos positivos como "instacapcut".
+        like_prefix = f"{normalized}%"
+        like_word = f"% {normalized}%"
+
+        velocity_where = "(lower(title) LIKE ? OR lower(title) LIKE ?)"
 
         # Apariciones últimas 24h
         last_24h = self.conn.execute(
-            """SELECT COUNT(*) FROM trends
-               WHERE lower(title) LIKE ?
+            f"""SELECT COUNT(*) FROM trends
+               WHERE {velocity_where}
                AND timestamp >= datetime('now', '-1 day')""",
-            (like_pattern,)
+            (like_prefix, like_word)
         ).fetchone()[0]
 
         # Apariciones 24-48h atrás
         prev_24h = self.conn.execute(
-            """SELECT COUNT(*) FROM trends
-               WHERE lower(title) LIKE ?
+            f"""SELECT COUNT(*) FROM trends
+               WHERE {velocity_where}
                AND timestamp >= datetime('now', '-2 days')
                AND timestamp < datetime('now', '-1 day')""",
-            (like_pattern,)
+            (like_prefix, like_word)
         ).fetchone()[0]
 
         # Apariciones últimos 7 días
         last_7d = self.conn.execute(
-            """SELECT COUNT(*) FROM trends
-               WHERE lower(title) LIKE ?
+            f"""SELECT COUNT(*) FROM trends
+               WHERE {velocity_where}
                AND timestamp >= datetime('now', '-7 days')""",
-            (like_pattern,)
+            (like_prefix, like_word)
         ).fetchone()[0]
 
         # Apariciones 7-14 días atrás
         prev_7d = self.conn.execute(
-            """SELECT COUNT(*) FROM trends
-               WHERE lower(title) LIKE ?
+            f"""SELECT COUNT(*) FROM trends
+               WHERE {velocity_where}
                AND timestamp >= datetime('now', '-14 days')
                AND timestamp < datetime('now', '-7 days')""",
-            (like_pattern,)
+            (like_prefix, like_word)
         ).fetchone()[0]
 
         # Calcular tendencia

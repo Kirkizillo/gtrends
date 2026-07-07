@@ -62,7 +62,7 @@ def create_mock_topics():
 
 def create_mock_interest():
     """Creates mock interest over time data."""
-    dates = pd.date_range(start='2026-01-22 10:00', end='2026-01-22 14:00', freq='H')
+    dates = pd.date_range(start='2026-01-22 10:00', end='2026-01-22 14:00', freq='h')
     data = {
         'apk': [45, 52, 61, 58, 63],
         'isPartial': [False, False, False, False, True]

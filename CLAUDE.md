@@ -68,12 +68,38 @@ python main.py --setup
 - Incremental export per term/region combination
 - Auto-creates sheets if missing
 - Maps `data_type` to sheet names
-- Exports content reports to dedicated tabs
+- Exports content reports to dedicated tabs (`Inf_YYYY-MM-DD_HH:MM`)
+- Auto-cleanup of report tabs older than 7 days (runs after each export)
 
 **report_generator.py** - Content team reports:
 - Detects potential apps and watchlist terms from scraped data
 - Generates rich-format reports exported to Google Sheets tabs
 - Plain text format for logs, Slack format for notifications
+- Novelty detection (new/resurgent apps) and trend velocity via Turso DB
+- Cross-region correlation analysis
+- Unicode-aware normalization (diacritics removal) consistent with database.py
+
+**database.py** - Turso (SQLite cloud) integration:
+- Tables: `trends` (all scraped data), `apps_seen` (novelty tracking), `run_metrics`
+- `_normalize_title()` - Unicode-aware normalization with diacritics removal, suffix stripping
+- Novelty detection: tracks first-seen apps, resurgent detection (>7 days gap)
+- Velocity tracking: prefix-match LIKE queries to avoid false positives
+- Weekly queries: top by country, new apps, cross-market (3+ countries), week comparison
+- Optional — system continues working without Turso (Google Sheets only)
+- Embedded replica mode: local temp file + cloud sync
+
+**digest.py** - Daily digest (23:00 UTC cron):
+- Consolidates all 10 daily runs into single HTML report
+- Sections: volume comparison (vs yesterday), top 15 apps, new apps, region activity heatmap
+- On Sundays: also generates weekly report and triggers tab cleanup
+- `--weekly` flag to force weekly report on any day
+- Output: `logs/digest_YYYY-MM-DD.html`
+
+**weekly_report.py** - Weekly HTML report:
+- Top 10 apps per market (20 countries), new apps by region, cross-market trends (3+ countries)
+- Week-over-week comparison: volume, new apps, region breakdown with change percentages
+- Triggered by digest.py on Sundays or via `--weekly` flag
+- Output: `logs/weekly_YYYY-MM-DD.html`
 
 **main.py** - Orchestration:
 - Config validation with fail-fast before scraping
@@ -86,35 +112,33 @@ python main.py --setup
 
 ### GitHub Actions Workflow
 
-Runs 10 times daily (5 groups × 2 runs each), staggered ~2h25min apart:
+Runs 11 times daily (5 groups × 2 runs + 1 digest), staggered ~2h25min apart:
 - 00:00, 12:00 UTC → group_1 (WW, IN, US, BR)
 - 02:25, 14:25 UTC → group_2 (ID, MX, PH, GB)
 - 04:50, 16:50 UTC → group_3 (AU, VN, DE, RU)
 - 07:15, 19:15 UTC → group_4 (TH, FR, IT, CO)
 - 09:40, 21:40 UTC → group_5 (JP, TR, RO, NG)
+- 23:00 UTC → digest (daily consolidation + weekly on Sundays)
 
 Group detection uses `github.event.schedule` for deterministic cron-to-group mapping (immune to GitHub Actions scheduling delays).
 
 On failure: Creates GitHub Issue automatically (with dedup, max 1 per 24h) + optional Slack notification.
 On success: Auto-closes any open `scraping-failure` issues.
 
-### Current Status (2026-03-06)
+### Current Status (2026-03-16)
 
 The system is stable with 100% success rate since Feb 3 (Run #83 onward, 0 failures).
-All data exports correctly to Google Sheets.
+All data exports correctly to Google Sheets + Turso DB.
 
 **Deployment timeline:**
 - Feb 13: Territory scaling (12→20 regions, 3→5 groups)
 - Feb 18: Localized keywords per country (12 countries with extra terms in local language)
 - Feb 20: Dual timeframe — localized terms switched to 24h window (`now 1-d`) for better data yield
 - Mar 6: Removed 6 dead localized keywords (FR, IT, DE, JP, CN, RO), replaced CN with CO (Colombia)
+- Mar 12: Turso DB integration, novelty detection, HTML reports, velocity tracking, daily digest
+- Mar 16: Fixed deterministic group detection (github.event.schedule), velocity query precision, normalization consistency, weekly report, tab cleanup
 
-**Feb 23 – Mar 6 analysis (100 runs, 99 successes):**
-- Average: 1,375 rows/day (+5.1% vs pre-localization baseline of ~1,308/day)
-- Working localized keywords: `apk indir` (TR, 22.9/day), `descargar apk` (MX, 14.6/day), `скачать apk` (RU, 10.0/day), `baixar apk` (BR, 4.4/day), `unduh apk` (ID, 1.3/day), `ดาวน์โหลด apk` (TH, 0.2/day)
-- Dead keywords removed: `télécharger apk` (FR), `scaricare apk` (IT), `apk herunterladen` (DE), `apkダウンロード` (JP), `下载apk` (CN), `descărcare apk` (RO) — 0 results in 2+ weeks even with 24h timeframe
-- CN replaced with CO (Colombia): Google blocked in China, only ~3 rows/day. CO uses `descargar apk` (same as MX)
-- GB under investigation: ~26 rows/day, -41.6% vs baseline, no code issues found — likely natural volume ceiling for UK APK queries
+**Active localized keywords:** `apk indir` (TR), `descargar apk` (MX, CO), `скачать apk` (RU), `baixar apk` (BR), `unduh apk` (ID), `ดาวน์โหลด apk` (TH)
 
 Topics extraction is disabled (PyTrends bug). Interest Over Time is disabled.
 Only Related Queries (Top + Rising) are active.
@@ -125,11 +149,15 @@ Environment variables (in `.env`):
 - `GOOGLE_SHEET_ID` - Target spreadsheet ID
 - `GOOGLE_CREDENTIALS_PATH` - Path to service account JSON
 - `PROXIES` - Optional comma-separated proxy list
+- `TURSO_DATABASE_URL` - Turso database URL (optional)
+- `TURSO_AUTH_TOKEN` - Turso authentication token (optional)
 
 GitHub Secrets required:
 - `GOOGLE_CREDENTIALS` - Full JSON content of service account
 - `GOOGLE_SHEET_ID` - Spreadsheet ID
 - `SLACK_WEBHOOK_URL` - Optional for failure notifications
+- `TURSO_DATABASE_URL` - Turso database URL
+- `TURSO_AUTH_TOKEN` - Turso auth token
 
 ## Rate Limiting
 
