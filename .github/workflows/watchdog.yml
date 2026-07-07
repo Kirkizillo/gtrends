@@ -1,0 +1,161 @@
+# Watchdog del workflow principal (trends_monitor.yml).
+#
+# Verifica diariamente que el monitor esté vivo:
+#   1. Que haya al menos un run exitoso en las últimas 24h.
+#   2. Que el workflow no esté deshabilitado (disabled_inactivity / disabled_manually).
+#   3. Si todo está sano, cierra los issues de watchdog abiertos.
+#
+# LIMITACIÓN CONOCIDA: cuando GitHub deshabilita workflows por inactividad
+# del repo (60 días sin commits), deshabilita TODOS los workflows con
+# schedule a la vez — incluido este watchdog. Por tanto este watchdog cubre
+# el modo de fallo "workflow habilitado pero fallando o silencioso"; el modo
+# "deshabilitado por inactividad" lo cubren los commits keepalive del digest
+# (mantienen actividad en el repo para que nunca se llegue a los 60 días).
+
+name: Watchdog
+
+on:
+  schedule:
+    - cron: '30 10 * * *'
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  actions: read
+
+jobs:
+  watchdog:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check trends_monitor health
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const WORKFLOW_FILE = 'trends_monitor.yml';
+            const WORKFLOW_URL = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/workflows/${WORKFLOW_FILE}`;
+            const DAY_MS = 24 * 60 * 60 * 1000;
+            const today = new Date().toISOString().split('T')[0];
+            const sinceISO = new Date(Date.now() - DAY_MS).toISOString();
+
+            const problems = [];
+
+            // === 1. Estado del workflow (active / disabled_inactivity / disabled_manually) ===
+            const wf = await github.rest.actions.getWorkflow({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: WORKFLOW_FILE
+            });
+            const state = wf.data.state;
+            console.log(`Estado del workflow: ${state}`);
+
+            if (state !== 'active') {
+              problems.push({
+                title: `Watchdog: workflow deshabilitado (${state}) - ${today}`,
+                body: [
+                  '## Workflow deshabilitado',
+                  '',
+                  `El workflow \`${WORKFLOW_FILE}\` está en estado \`${state}\` y NO se ejecutará por schedule.`,
+                  '',
+                  '### Cómo re-habilitarlo',
+                  '',
+                  '**Opción A (CLI):**',
+                  '```bash',
+                  `gh workflow enable ${WORKFLOW_FILE} --repo ${context.repo.owner}/${context.repo.repo}`,
+                  '```',
+                  '',
+                  '**Opción B (UI):**',
+                  `Abrir ${WORKFLOW_URL} y pulsar "Enable workflow".`,
+                  '',
+                  `Detectado por el watchdog el ${new Date().toISOString()}.`
+                ].join('\n')
+              });
+            }
+
+            // === 2. Runs exitosos en las últimas 24h ===
+            // Solo tiene sentido alertar por silencio si el workflow está activo;
+            // si está deshabilitado, el issue del punto 1 ya lo cubre.
+            if (state === 'active') {
+              const runs = await github.rest.actions.listWorkflowRuns({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                workflow_id: WORKFLOW_FILE,
+                status: 'success',
+                created: `>${sinceISO}`,
+                per_page: 1
+              });
+              console.log(`Runs exitosos en 24h: ${runs.data.total_count}`);
+
+              if (runs.data.total_count === 0) {
+                problems.push({
+                  title: `Watchdog: sin runs exitosos en 24h - ${today}`,
+                  body: [
+                    '## Sin ejecuciones exitosas en 24 horas',
+                    '',
+                    `El workflow \`${WORKFLOW_FILE}\` no tiene ningún run exitoso desde ${sinceISO}.`,
+                    'Debería ejecutarse ~11 veces al día (5 grupos x 2 + digest).',
+                    '',
+                    `- **Runs del workflow:** ${WORKFLOW_URL}`,
+                    `- **Detectado:** ${new Date().toISOString()}`,
+                    '',
+                    'Revisar los logs de los últimos runs para más detalles.'
+                  ].join('\n')
+                });
+              }
+            }
+
+            // === Issues de watchdog abiertos actualmente ===
+            const issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'watchdog',
+              per_page: 20
+            });
+
+            // === 3. Todo sano → cerrar issues de watchdog abiertos ===
+            if (problems.length === 0) {
+              console.log('Todo sano.');
+              for (const issue of issues.data) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  body: `El watchdog verificó el ${new Date().toISOString()} que \`${WORKFLOW_FILE}\` está activo y con runs exitosos en las últimas 24h. Cerrando automáticamente.`
+                });
+                await github.rest.issues.update({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  state: 'closed',
+                  state_reason: 'completed'
+                });
+                console.log(`Cerrado issue #${issue.number}: ${issue.title}`);
+              }
+              return;
+            }
+
+            // === Crear issues con dedup (mismo patrón que trends_monitor.yml) ===
+            for (const problem of problems) {
+              // Prefijo del título sin la fecha, para dedup por tipo de problema
+              const titlePrefix = problem.title.replace(/ - \d{4}-\d{2}-\d{2}$/, '');
+
+              const recentIssue = issues.data.find(i => {
+                const created = new Date(i.created_at);
+                const now = new Date();
+                return i.title.startsWith(titlePrefix) && (now - created) < DAY_MS;
+              });
+
+              if (recentIssue) {
+                console.log(`Ya existe issue reciente #${recentIssue.number} para: ${titlePrefix}`);
+                continue;
+              }
+
+              const created = await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: problem.title,
+                body: problem.body,
+                labels: ['watchdog', 'automated']
+              });
+              console.log(`Creado issue #${created.data.number}: ${problem.title}`);
+            }
