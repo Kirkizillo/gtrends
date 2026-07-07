@@ -9,7 +9,13 @@ from typing import Dict, List, Optional
 from dataclasses import dataclass, field
 from urllib.parse import quote_plus
 
-from pytrends.request import TrendReq
+try:
+    # pytrends-modern: drop-in replacement mantenido (pytrends está archivado)
+    from pytrends_modern import TrendReq
+    PYTRENDS_MODERN = True
+except ImportError:
+    from pytrends.request import TrendReq
+    PYTRENDS_MODERN = False
 
 import config
 from rate_limiter import RateLimiter, retry_with_backoff
@@ -139,12 +145,34 @@ class TrendsScraper:
                 }
                 logger.info(f"Usando proxy: {proxy[:30]}...")
 
-            self.pytrends = TrendReq(
-                hl='en-US',
-                tz=360,
-                timeout=(10, 25),
-                requests_args=requests_args
-            )
+            if PYTRENDS_MODERN:
+                # pytrends-modern hace el fetch inicial de cookies dentro de
+                # __init__ ANTES de extraer 'headers' de requests_args, lo que
+                # provoca un TypeError ("multiple values for 'headers'") y deja
+                # la sesión sin cookie NID (causa 429s). Por eso los headers se
+                # aplican después de construir, vía pytrends.headers.update().
+                headers = requests_args.pop('headers', {})
+                self.pytrends = TrendReq(
+                    hl='en-US',
+                    tz=360,
+                    timeout=(10, 25),
+                    # Desactivar reintentos internos: _fetch_with_retry es la
+                    # única capa de retry (retries=0 y backoff_factor=0 evitan
+                    # que se monte el HTTPAdapter con urllib3 Retry).
+                    retries=0,
+                    backoff_factor=0,
+                    # Rotación de User-Agent propia (lista USER_AGENTS)
+                    rotate_user_agent=False,
+                    requests_args=requests_args
+                )
+                self.pytrends.headers.update(headers)
+            else:
+                self.pytrends = TrendReq(
+                    hl='en-US',
+                    tz=360,
+                    timeout=(10, 25),
+                    requests_args=requests_args
+                )
             logger.info("PyTrends inicializado correctamente")
         except Exception as e:
             logger.error(f"Error inicializando PyTrends: {e}")

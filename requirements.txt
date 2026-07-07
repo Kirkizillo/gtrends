@@ -1,5 +1,6 @@
 # Google Trends API
-pytrends>=4.9.2
+pytrends-modern>=0.2.10,<0.3
+# pytrends>=4.9.2  # rollback
 
 # Google Sheets API
 gspread>=5.12.0

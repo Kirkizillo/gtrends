@@ -33,8 +33,14 @@ def test_user_agent_rotation():
         scraper = TrendsScraper()
 
         # Extract the User-Agent from the pytrends session
-        if hasattr(scraper.pytrends, 'requests_args'):
+        # pytrends-modern almacena los headers en .headers (los extrae de
+        # requests_args); pytrends clásico los deja en requests_args['headers']
+        ua = 'N/A'
+        if hasattr(scraper.pytrends, 'headers') and isinstance(scraper.pytrends.headers, dict):
+            ua = scraper.pytrends.headers.get('User-Agent', 'N/A')
+        if ua == 'N/A' and hasattr(scraper.pytrends, 'requests_args'):
             ua = scraper.pytrends.requests_args.get('headers', {}).get('User-Agent', 'N/A')
+        if ua != 'N/A':
             user_agents_used.append(ua)
             logger.info(f"  User-Agent: {ua[:80]}...")
         else:

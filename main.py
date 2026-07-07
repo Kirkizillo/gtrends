@@ -156,7 +156,10 @@ def run_health_check(logger) -> bool:
     # 2. Verificar Google Trends (intento básico)
     logger.info("\n[2/2] Verificando conexion a Google Trends...")
     try:
-        from pytrends.request import TrendReq
+        try:
+            from pytrends_modern import TrendReq
+        except ImportError:
+            from pytrends.request import TrendReq
         pytrends = TrendReq(hl='en-US', tz=360, timeout=(5, 10))
         # Intento con suggestions (más estable que trending_searches)
         suggestions = pytrends.suggestions(keyword='test')
