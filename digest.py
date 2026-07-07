@@ -10,10 +10,11 @@ Uso:
     python digest.py --date 2026-03-10   # Genera digest de fecha específica
 """
 import argparse
+import glob
 import logging
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import config
 from database import TrendsDatabase
@@ -26,9 +27,33 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def fetch_digest_data(db: TrendsDatabase, date: str = None) -> dict:
+    """
+    Obtiene los datos del día una sola vez, para renderizarlos dos veces
+    (HTML + Markdown) sin duplicar queries a Turso.
+
+    Args:
+        db: TrendsDatabase conectada
+        date: Fecha en formato YYYY-MM-DD (default: hoy, día calendario UTC)
+
+    Returns:
+        Dict con {date, top_apps, new_apps, region_activity, comparison}
+    """
+    if date is None:
+        date = datetime.utcnow().strftime("%Y-%m-%d")
+
+    return {
+        'date': date,
+        'top_apps': db.get_today_top_apps(limit=15, date=date),
+        'new_apps': db.get_today_new_apps(date=date),
+        'region_activity': db.get_region_activity(date=date),
+        'comparison': db.get_daily_comparison(date=date),
+    }
+
+
 def generate_digest(db: TrendsDatabase, date: str = None) -> str:
     """
-    Genera un digest HTML consolidado del día.
+    Genera un digest HTML consolidado del día (compatibilidad hacia atrás).
 
     Args:
         db: TrendsDatabase conectada
@@ -37,14 +62,24 @@ def generate_digest(db: TrendsDatabase, date: str = None) -> str:
     Returns:
         String HTML del digest
     """
-    if date is None:
-        date = datetime.utcnow().strftime("%Y-%m-%d")
+    return generate_digest_html(fetch_digest_data(db, date))
 
-    # Obtener datos del día
-    top_apps = db.get_today_top_apps(limit=15)
-    new_apps = db.get_today_new_apps()
-    region_activity = db.get_region_activity()
-    comparison = db.get_daily_comparison()
+
+def generate_digest_html(data: dict) -> str:
+    """
+    Renderiza el digest HTML a partir de los datos ya obtenidos.
+
+    Args:
+        data: Dict de fetch_digest_data()
+
+    Returns:
+        String HTML del digest
+    """
+    date = data['date']
+    top_apps = data['top_apps']
+    new_apps = data['new_apps']
+    region_activity = data['region_activity']
+    comparison = data['comparison']
 
     return f"""<!DOCTYPE html>
 <html lang="es">
@@ -216,33 +251,232 @@ def _esc(text: str) -> str:
     return text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('"', '&quot;')
 
 
+# =============================================================================
+# Digest en Markdown (versión compacta para commitear al repo)
+# =============================================================================
+
+def _md_esc(text: str) -> str:
+    """Escapa el carácter pipe para no romper tablas Markdown."""
+    if not text:
+        return ""
+    return str(text).replace('|', '\\|')
+
+
+def generate_digest_markdown(data: dict) -> str:
+    """
+    Genera la versión Markdown compacta del digest diario.
+
+    Reutiliza los datos ya obtenidos por fetch_digest_data() — misma fuente
+    que el HTML, render distinto.
+
+    Args:
+        data: Dict de fetch_digest_data()
+
+    Returns:
+        String Markdown del digest
+    """
+    date = data['date']
+    comp = data['comparison']
+    top_apps = data['top_apps']
+    new_apps = data['new_apps']
+    regions = data['region_activity']
+
+    today = comp.get('today', 0)
+    yesterday = comp.get('yesterday', 0)
+    change = comp.get('change_pct', 0)
+    sign = "+" if change >= 0 else ""
+
+    lines = [
+        f"# Digest Diario - {date}",
+        "",
+        f"Generado: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}",
+        "",
+        "## Volumen del Dia",
+        "",
+        f"| Hoy | Ayer | Cambio |",
+        f"|-----|------|--------|",
+        f"| {today} | {yesterday} | {sign}{change}% |",
+        "",
+        "## Top 15 Apps del Dia",
+        "",
+    ]
+
+    if top_apps:
+        lines.append("| # | App | Apariciones | Tipo | Paises |")
+        lines.append("|---|-----|-------------|------|--------|")
+        for i, app in enumerate(top_apps, 1):
+            countries = ', '.join(app['countries'][:5])
+            extra = f" +{len(app['countries']) - 5}" if len(app['countries']) > 5 else ""
+            has_rising = any('rising' in t for t in app['data_types'])
+            badge = "Rising" if has_rising else "Top"
+            lines.append(
+                f"| {i} | {_md_esc(app['title'])} | {app['count']}x | {badge} | {_md_esc(countries)}{extra} |"
+            )
+    else:
+        lines.append("Sin datos")
+
+    lines += ["", f"## Apps Nuevas Hoy ({len(new_apps)})", ""]
+    if new_apps:
+        for app in new_apps[:20]:
+            name = app['display_name'] or app['title_normalized']
+            countries = ', '.join(app['countries'][:5])
+            first_seen = (app['first_seen'] or "")[:16]
+            lines.append(f"- **{_md_esc(name)}** ({_md_esc(countries)}) — {first_seen}")
+        if len(new_apps) > 20:
+            lines.append(f"- ...y {len(new_apps) - 20} mas")
+    else:
+        lines.append("Sin apps nuevas")
+
+    lines += ["", "## Actividad por Region", ""]
+    if regions:
+        lines.append("| Region | Registros |")
+        lines.append("|--------|-----------|")
+        for r in regions:
+            lines.append(f"| {r['country_code']} | {r['count']} |")
+    else:
+        lines.append("Sin datos de regiones")
+
+    lines += ["", "---", "Generado por Google Trends Monitor", ""]
+    return "\n".join(lines)
+
+
+# =============================================================================
+# Dashboard en README.md (bloque entre marcadores, actúa como keepalive:
+# el commit diario evita que GitHub desactive el workflow por inactividad)
+# =============================================================================
+
+DASHBOARD_START = "<!-- DASHBOARD:START -->"
+DASHBOARD_END = "<!-- DASHBOARD:END -->"
+
+
+def update_readme_dashboard(data: dict, readme_path: str = None) -> bool:
+    """
+    Reescribe el bloque de dashboard del README.md entre los marcadores
+    DASHBOARD:START y DASHBOARD:END.
+
+    Args:
+        data: Dict de fetch_digest_data()
+        readme_path: Ruta al README.md (default: junto a este script)
+
+    Returns:
+        True si se actualizó correctamente
+    """
+    if readme_path is None:
+        readme_path = os.path.join(os.path.dirname(__file__), "README.md")
+
+    try:
+        with open(readme_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+    except FileNotFoundError:
+        logger.warning(f"README.md no encontrado: {readme_path}")
+        return False
+
+    if DASHBOARD_START not in content or DASHBOARD_END not in content:
+        logger.warning("Marcadores de dashboard no encontrados en README.md")
+        return False
+
+    comp = data['comparison']
+    change = comp.get('change_pct', 0)
+    sign = "+" if change >= 0 else ""
+
+    top5 = ""
+    for i, app in enumerate(data['top_apps'][:5], 1):
+        countries = ', '.join(app['countries'][:3])
+        top5 += f"{i}. **{_md_esc(app['title'])}** — {app['count']}x ({_md_esc(countries)})\n"
+    if not top5:
+        top5 = "Sin datos\n"
+
+    block = f"""{DASHBOARD_START}
+## Dashboard
+
+**Ultima actualizacion:** {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}
+
+**Volumen hoy:** {comp.get('today', 0)} registros ({sign}{change}% vs ayer)
+
+**Top 5 apps del dia:**
+
+{top5}
+[Ver digest completo](reports/latest.md)
+{DASHBOARD_END}"""
+
+    start_idx = content.index(DASHBOARD_START)
+    end_idx = content.index(DASHBOARD_END) + len(DASHBOARD_END)
+    new_content = content[:start_idx] + block + content[end_idx:]
+
+    with open(readme_path, 'w', encoding='utf-8') as f:
+        f.write(new_content)
+
+    logger.info("Dashboard del README.md actualizado")
+    return True
+
+
+def prune_old_reports(reports_dir: str, days: int = 90):
+    """Elimina reports/digest_*.md con más de N días de antigüedad."""
+    cutoff = datetime.utcnow() - timedelta(days=days)
+    for path in glob.glob(os.path.join(reports_dir, "digest_*.md")):
+        name = os.path.basename(path)
+        try:
+            file_date = datetime.strptime(name, "digest_%Y-%m-%d.md")
+        except ValueError:
+            continue
+        if file_date < cutoff:
+            try:
+                os.remove(path)
+                logger.info(f"Report antiguo eliminado: {name}")
+            except OSError as e:
+                logger.warning(f"No se pudo eliminar {name}: {e}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Genera digest diario consolidado")
     parser.add_argument('--date', type=str, help="Fecha YYYY-MM-DD (default: hoy)")
     parser.add_argument('--weekly', action='store_true', help="Forzar generacion de informe semanal")
     args = parser.parse_args()
 
-    # Conectar a Turso
+    # Conectar a Turso en modo remoto: sin replica local ni sync completo.
+    # El embedded replica descargaba la BD entera (~107k filas) y agotaba
+    # la cuota mensual del plan free de Turso hacia el día 9-10 del mes.
     db = TrendsDatabase()
-    if not db.connect():
+    if not db.connect(remote_only=True):
         logger.error("No se pudo conectar a Turso. Verifica credenciales.")
         sys.exit(1)
 
-    # Generar digest diario
-    logger.info("Generando digest diario...")
-    html = generate_digest(db, date=args.date)
+    # Retención: acota el tamaño de la BD y el egress de sync de las replicas
+    db.purge_old_trends(days=365)
 
-    # Guardar
+    # Obtener datos una vez, renderizar dos veces (HTML + Markdown)
+    logger.info("Generando digest diario...")
+    date_str = args.date or datetime.utcnow().strftime("%Y-%m-%d")
+    data = fetch_digest_data(db, date=date_str)
+    html = generate_digest_html(data)
+    markdown = generate_digest_markdown(data)
+
+    # Guardar HTML en logs/ (artifact efímero)
     output_dir = os.path.join(os.path.dirname(__file__), "logs")
     os.makedirs(output_dir, exist_ok=True)
 
-    date_str = args.date or datetime.utcnow().strftime("%Y-%m-%d")
     filepath = os.path.join(output_dir, f"digest_{date_str}.html")
 
     with open(filepath, 'w', encoding='utf-8') as f:
         f.write(html)
 
     logger.info(f"Digest guardado: {filepath}")
+
+    # Guardar Markdown en reports/ (se commitea al repo — mantiene el
+    # historial navegable y actúa como keepalive del workflow)
+    reports_dir = os.path.join(os.path.dirname(__file__), "reports")
+    os.makedirs(reports_dir, exist_ok=True)
+
+    md_path = os.path.join(reports_dir, f"digest_{date_str}.md")
+    latest_path = os.path.join(reports_dir, "latest.md")
+    for path in (md_path, latest_path):
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write(markdown)
+    logger.info(f"Digest Markdown guardado: {md_path} (+ latest.md)")
+
+    # Actualizar dashboard del README y limpiar reports antiguos
+    update_readme_dashboard(data)
+    prune_old_reports(reports_dir, days=90)
 
     # Informe semanal: se genera los domingos o con --weekly
     is_sunday = datetime.utcnow().weekday() == 6

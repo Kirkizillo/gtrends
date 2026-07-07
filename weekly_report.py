@@ -358,7 +358,7 @@ def main():
     args = parser.parse_args()
 
     db = TrendsDatabase()
-    if not db.connect():
+    if not db.connect(remote_only=True):  # solo lectura: evita sync completo de la replica (cuota Turso)
         logger.error("No se pudo conectar a Turso. Verifica credenciales.")
         sys.exit(1)
 

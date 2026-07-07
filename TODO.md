@@ -1,5 +1,15 @@
 # TODO - Google Trends Monitor
 
+## Pendiente de acción del usuario (2026-07-07)
+
+### Solicitar acceso al alpha del API oficial de Google Trends
+
+Enviar solicitud en https://developers.google.com/search/apis/trends (formulario de alpha testers, requiere cuenta Google / proyecto de Google Cloud). Texto de use-case sugerido:
+
+> We run an automated content-intelligence pipeline that monitors app-related search interest (e.g. "apk", "app download" and localized equivalents) across 20 countries, 10 times daily, to detect emerging app trends for an editorial team. We currently rely on unofficial scraping of the Trends UI, which is fragile. We would use the official API for consistently-scaled interest-over-time and geo breakdowns, and can provide structured feedback from a production workload (~60 term-geo combinations/day). We are especially interested in future availability of related-queries data, which is the core of our use case.
+
+Nota: el alpha actual solo expone interest-over-time y geo breakdown (sin related queries) con cuota pequeña — es una apuesta a largo plazo, no un reemplazo inmediato.
+
 ## Estado Actual (2026-03-06)
 
 El sistema mantiene **100% de éxito** desde el 3 de febrero (Run #83 en adelante, 0 fallos). En el periodo Feb 23 - Mar 6 se ejecutaron 100 runs (99 exitosos, 0 fallos, 1 en progreso al momento del análisis).

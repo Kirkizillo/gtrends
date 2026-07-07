@@ -12,7 +12,7 @@ import logging
 import os
 import re
 import unicodedata
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Tuple
 
 import config
@@ -28,17 +28,27 @@ class TrendsDatabase:
     En GitHub Actions el archivo local es efímero, pero los datos persisten en la nube.
     """
 
-    def __init__(self):
+    def __init__(self, remote_only: bool = False):
         self.conn = None
         self._connected = False
+        self._remote_only = remote_only
 
-    def connect(self) -> bool:
+    def connect(self, remote_only: Optional[bool] = None) -> bool:
         """
         Conecta a Turso usando credenciales de config/env.
+
+        Args:
+            remote_only: Si True, usa conexión remota directa (sin replica local
+                ni sync). Ideal para flujos de solo lectura como digest/weekly:
+                el embedded replica descarga la BD completa en cada sync y agota
+                la cuota mensual del plan free de Turso (~107k filas × 11 syncs/día).
 
         Returns:
             True si la conexión fue exitosa
         """
+        if remote_only is not None:
+            self._remote_only = remote_only
+
         try:
             import libsql
 
@@ -48,6 +58,14 @@ class TrendsDatabase:
             if not turso_url or not turso_token:
                 logger.warning("Turso no configurado (TURSO_DATABASE_URL o TURSO_AUTH_TOKEN vacíos)")
                 return False
+
+            if self._remote_only:
+                # Conexión remota directa: sin replica local, sin sync().
+                # Cada query viaja a Turso, pero no se descarga la BD entera.
+                self.conn = libsql.connect(turso_url, auth_token=turso_token)
+                self._connected = True
+                logger.info("✓ Conectado a Turso (modo remoto, sin replica local)")
+                return True
 
             # Embedded replica: archivo local temporal + sync con Turso cloud
             local_db = os.path.join(os.path.dirname(__file__), "data", "local_replica.db")
@@ -71,6 +89,11 @@ class TrendsDatabase:
     @property
     def is_connected(self) -> bool:
         return self._connected and self.conn is not None
+
+    def _sync(self):
+        """Sincroniza la replica local con Turso (no-op en modo remoto)."""
+        if not self._remote_only and self.conn is not None:
+            self.conn.sync()
 
     def _create_tables(self):
         """Crea las tablas si no existen."""
@@ -142,7 +165,7 @@ class TrendsDatabase:
         """)
 
         self.conn.commit()
-        self.conn.sync()
+        self._sync()
 
     # =========================================================================
     # Inserción de datos
@@ -177,7 +200,7 @@ class TrendsDatabase:
                 self._upsert_app_seen(normalized, item.title, item.country_code, now_iso)
 
         self.conn.commit()
-        self.conn.sync()
+        self._sync()
         logger.info(f"  Turso: {len(trend_data_list)} registros insertados")
 
     def _upsert_app_seen(self, normalized: str, display_name: str, country_code: str, now_iso: str):
@@ -234,7 +257,7 @@ class TrendsDatabase:
             )
         )
         self.conn.commit()
-        self.conn.sync()
+        self._sync()
 
     # =========================================================================
     # Novelty Detection
@@ -403,9 +426,27 @@ class TrendsDatabase:
     # Consultas para digest diario
     # =========================================================================
 
-    def get_today_top_apps(self, limit: int = 10) -> list:
+    @staticmethod
+    def _day_bounds(date: str) -> Tuple[str, str]:
         """
-        Obtiene las apps más frecuentes del día actual.
+        Devuelve los límites [date 00:00, date+1 00:00) para una fecha YYYY-MM-DD.
+
+        Funciona por comparación de strings tanto para timestamps
+        "YYYY-MM-DD HH:MM:SS" (tabla trends) como ISO "YYYY-MM-DDTHH:MM:SS+00:00"
+        (apps_seen.first_seen).
+        """
+        start = datetime.strptime(date, "%Y-%m-%d")
+        end = start + timedelta(days=1)
+        return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
+
+    def get_today_top_apps(self, limit: int = 10, date: Optional[str] = None) -> list:
+        """
+        Obtiene las apps más frecuentes del día.
+
+        Args:
+            limit: Máximo de apps a devolver
+            date: Fecha YYYY-MM-DD para usar el día calendario [00:00, 24:00) UTC.
+                  Si es None, usa ventana móvil de últimas 24h (comportamiento previo).
 
         Returns:
             Lista de dicts con {title, count, countries, data_types}
@@ -413,16 +454,24 @@ class TrendsDatabase:
         if not self.is_connected:
             return []
 
+        if date:
+            start, end = self._day_bounds(date)
+            where = "timestamp >= ? AND timestamp < ?"
+            params = (start, end, limit)
+        else:
+            where = "timestamp >= datetime('now', '-1 day')"
+            params = (limit,)
+
         rows = self.conn.execute(
-            """SELECT title, COUNT(*) as cnt,
+            f"""SELECT title, COUNT(*) as cnt,
                       GROUP_CONCAT(DISTINCT country_code) as countries,
                       GROUP_CONCAT(DISTINCT data_type) as types
                FROM trends
-               WHERE timestamp >= datetime('now', '-1 day')
+               WHERE {where}
                GROUP BY lower(title)
                ORDER BY cnt DESC
                LIMIT ?""",
-            (limit,)
+            params
         ).fetchall()
 
         return [
@@ -435,9 +484,12 @@ class TrendsDatabase:
             for row in rows
         ]
 
-    def get_today_new_apps(self) -> list:
+    def get_today_new_apps(self, date: Optional[str] = None) -> list:
         """
         Obtiene apps vistas por primera vez hoy.
+
+        Args:
+            date: Fecha YYYY-MM-DD (día calendario UTC). None = últimas 24h móviles.
 
         Returns:
             Lista de dicts con {title, countries, first_seen}
@@ -445,12 +497,22 @@ class TrendsDatabase:
         if not self.is_connected:
             return []
 
-        rows = self.conn.execute(
-            """SELECT title_normalized, display_name, first_seen, countries_json
-               FROM apps_seen
-               WHERE first_seen >= datetime('now', '-1 day')
-               ORDER BY first_seen DESC"""
-        ).fetchall()
+        if date:
+            start, end = self._day_bounds(date)
+            rows = self.conn.execute(
+                """SELECT title_normalized, display_name, first_seen, countries_json
+                   FROM apps_seen
+                   WHERE first_seen >= ? AND first_seen < ?
+                   ORDER BY first_seen DESC""",
+                (start, end)
+            ).fetchall()
+        else:
+            rows = self.conn.execute(
+                """SELECT title_normalized, display_name, first_seen, countries_json
+                   FROM apps_seen
+                   WHERE first_seen >= datetime('now', '-1 day')
+                   ORDER BY first_seen DESC"""
+            ).fetchall()
 
         return [
             {
@@ -462,9 +524,12 @@ class TrendsDatabase:
             for row in rows
         ]
 
-    def get_region_activity(self) -> list:
+    def get_region_activity(self, date: Optional[str] = None) -> list:
         """
-        Obtiene actividad por región en las últimas 24h.
+        Obtiene actividad por región.
+
+        Args:
+            date: Fecha YYYY-MM-DD (día calendario UTC). None = últimas 24h móviles.
 
         Returns:
             Lista de dicts con {country_code, count}
@@ -472,19 +537,32 @@ class TrendsDatabase:
         if not self.is_connected:
             return []
 
+        if date:
+            start, end = self._day_bounds(date)
+            where = "timestamp >= ? AND timestamp < ?"
+            params = (start, end)
+        else:
+            where = "timestamp >= datetime('now', '-1 day')"
+            params = ()
+
         rows = self.conn.execute(
-            """SELECT country_code, COUNT(*) as cnt
+            f"""SELECT country_code, COUNT(*) as cnt
                FROM trends
-               WHERE timestamp >= datetime('now', '-1 day')
+               WHERE {where}
                GROUP BY country_code
-               ORDER BY cnt DESC"""
+               ORDER BY cnt DESC""",
+            params
         ).fetchall()
 
         return [{'country_code': row[0], 'count': row[1]} for row in rows]
 
-    def get_daily_comparison(self) -> dict:
+    def get_daily_comparison(self, date: Optional[str] = None) -> dict:
         """
         Compara volumen de hoy vs ayer.
+
+        Args:
+            date: Fecha YYYY-MM-DD. "Hoy" = [date, date+1), "ayer" = [date-1, date).
+                  None = ventanas móviles de 24h (comportamiento previo).
 
         Returns:
             Dict con {today, yesterday, change_pct}
@@ -492,15 +570,29 @@ class TrendsDatabase:
         if not self.is_connected:
             return {'today': 0, 'yesterday': 0, 'change_pct': 0.0}
 
-        today = self.conn.execute(
-            "SELECT COUNT(*) FROM trends WHERE timestamp >= datetime('now', '-1 day')"
-        ).fetchone()[0]
+        if date:
+            start, end = self._day_bounds(date)
+            prev_start = (datetime.strptime(date, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
 
-        yesterday = self.conn.execute(
-            """SELECT COUNT(*) FROM trends
-               WHERE timestamp >= datetime('now', '-2 days')
-               AND timestamp < datetime('now', '-1 day')"""
-        ).fetchone()[0]
+            today = self.conn.execute(
+                "SELECT COUNT(*) FROM trends WHERE timestamp >= ? AND timestamp < ?",
+                (start, end)
+            ).fetchone()[0]
+
+            yesterday = self.conn.execute(
+                "SELECT COUNT(*) FROM trends WHERE timestamp >= ? AND timestamp < ?",
+                (prev_start, start)
+            ).fetchone()[0]
+        else:
+            today = self.conn.execute(
+                "SELECT COUNT(*) FROM trends WHERE timestamp >= datetime('now', '-1 day')"
+            ).fetchone()[0]
+
+            yesterday = self.conn.execute(
+                """SELECT COUNT(*) FROM trends
+                   WHERE timestamp >= datetime('now', '-2 days')
+                   AND timestamp < datetime('now', '-1 day')"""
+            ).fetchone()[0]
 
         change = ((today - yesterday) / yesterday * 100) if yesterday > 0 else 0.0
 
@@ -668,6 +760,47 @@ class TrendsDatabase:
         }
 
     # =========================================================================
+    # Retención de datos
+    # =========================================================================
+
+    def purge_old_trends(self, days: int = 365) -> int:
+        """
+        Elimina registros de trends con más de N días de antigüedad.
+
+        Acota el tamaño de la BD (y por tanto el egress de sync de las
+        replicas embebidas), evitando agotar la cuota mensual de Turso.
+
+        Args:
+            days: Días de retención (default: 365)
+
+        Returns:
+            Número de filas eliminadas
+        """
+        if not self.is_connected:
+            return 0
+
+        try:
+            cutoff = f"-{int(days)} days"
+            to_delete = self.conn.execute(
+                "SELECT COUNT(*) FROM trends WHERE timestamp < datetime('now', ?)",
+                (cutoff,)
+            ).fetchone()[0]
+
+            if to_delete > 0:
+                self.conn.execute(
+                    "DELETE FROM trends WHERE timestamp < datetime('now', ?)",
+                    (cutoff,)
+                )
+                self.conn.commit()
+                self._sync()
+
+            logger.info(f"Retención: {to_delete} filas eliminadas de trends (>{days} días)")
+            return to_delete
+        except Exception as e:
+            logger.warning(f"Error en purge_old_trends: {e}")
+            return 0
+
+    # =========================================================================
     # Utilidades
     # =========================================================================
 
@@ -705,7 +838,7 @@ class TrendsDatabase:
         """Cierra la conexión."""
         if self.conn:
             try:
-                self.conn.sync()
+                self._sync()
                 self.conn.close()
             except Exception:
                 pass

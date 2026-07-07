@@ -4,6 +4,12 @@ Sistema automatizado para extraer datos de Google Trends y exportarlos a Google 
 
 **Estado:** Estable. 100% de éxito desde 2026-02-03 (~200+ runs consecutivos). Los datos se exportan correctamente a Google Sheets en cada ejecución.
 
+<!-- DASHBOARD:START -->
+## Dashboard
+
+Pendiente de primer digest. Este bloque se actualiza automáticamente cada día a las 23:00 UTC con el volumen del día, el top 5 de apps y el enlace al último digest en `reports/latest.md`.
+<!-- DASHBOARD:END -->
+
 ## Características
 
 - Extrae Related Queries (Top + Rising) de Google Trends
