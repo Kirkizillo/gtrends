@@ -427,6 +427,39 @@ def prune_old_reports(reports_dir: str, days: int = 90):
                 logger.warning(f"No se pudo eliminar {name}: {e}")
 
 
+def notify_slack_success(data: dict) -> bool:
+    """
+    Notificación de éxito a Slack con resumen del digest (TODO.md pendiente).
+    Solo actúa si SLACK_WEBHOOK_URL está definida. Nunca lanza excepciones.
+    """
+    webhook = os.getenv("SLACK_WEBHOOK_URL", "").strip()
+    if not webhook:
+        logger.info("SLACK_WEBHOOK_URL no definida, se omite notificación de éxito")
+        return False
+
+    comp = data.get('comparison') or {}
+    top = data.get('top_apps') or []
+    new_apps = data.get('new_apps') or []
+    top_names = ", ".join(str(a.get('display_name', a.get('title', '?'))) for a in top[:5])
+    text = (
+        f":chart_with_upwards_trend: *Digest {data.get('date')}* — "
+        f"{comp.get('today', 0)} filas ({comp.get('change_pct', 0.0):+.1f}% vs ayer), "
+        f"{len(new_apps)} apps nuevas.\n"
+        f"Top: {top_names or 'sin datos'}\n"
+        f"<https://github.com/Kirkizillo/gtrends/blob/main/reports/latest.md|Ver informe completo>"
+    )
+    try:
+        import requests
+        resp = requests.post(webhook, json={"text": text}, timeout=15)
+        ok = resp.status_code < 300
+        if not ok:
+            logger.warning(f"Slack devolvió {resp.status_code}")
+        return ok
+    except Exception as e:
+        logger.warning(f"No se pudo notificar a Slack: {e}")
+        return False
+
+
 def main():
     parser = argparse.ArgumentParser(description="Genera digest diario consolidado")
     parser.add_argument('--date', type=str, help="Fecha YYYY-MM-DD (default: hoy)")
@@ -477,6 +510,9 @@ def main():
     # Actualizar dashboard del README y limpiar reports antiguos
     update_readme_dashboard(data)
     prune_old_reports(reports_dir, days=90)
+
+    # Notificación de éxito (opcional, requiere SLACK_WEBHOOK_URL)
+    notify_slack_success(data)
 
     # Informe semanal: se genera los domingos o con --weekly
     is_sunday = datetime.utcnow().weekday() == 6

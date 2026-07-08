@@ -176,12 +176,32 @@ class GoogleSheetsExporter:
                     worksheet.append_rows(rows, value_input_option='RAW')
                     export_counts[sheet_name] = len(rows)
                     logger.info(f"Exportadas {len(rows)} filas a '{sheet_name}'")
+                    self._check_capacity(worksheet, sheet_name)
 
             except Exception as e:
                 logger.error(f"Error exportando a '{sheet_name}': {e}")
                 export_counts[sheet_name] = 0
 
         return export_counts
+
+    # Umbral de aviso: ~300k filas × 7 columnas ≈ 2.1M celdas por pestaña.
+    # El límite duro de Google Sheets es 10M de celdas por spreadsheet.
+    # Política: Turso es el archivo primario; a fin de año renombrar las
+    # pestañas a *_2026 y dejar que el exporter cree pestañas nuevas.
+    CAPACITY_WARN_ROWS = 300_000
+
+    def _check_capacity(self, worksheet: gspread.Worksheet, sheet_name: str):
+        """Avisa (log ruidoso) si una pestaña se acerca al límite de celdas."""
+        try:
+            if worksheet.row_count > self.CAPACITY_WARN_ROWS:
+                logger.warning(
+                    f"CAPACIDAD: la pestaña '{sheet_name}' supera "
+                    f"{self.CAPACITY_WARN_ROWS} filas ({worksheet.row_count}). "
+                    f"Rotar a '{sheet_name}_{datetime.now().year}' pronto — "
+                    f"Turso conserva el histórico completo."
+                )
+        except Exception:
+            pass
 
     def setup_sheets(self):
         """
