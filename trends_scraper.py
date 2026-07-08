@@ -64,6 +64,26 @@ USER_AGENTS = [
 ]
 
 
+# Frases que indican rate-limiting de Google Trends. pytrends (legacy) lanza
+# errores con "429"; pytrends-modern usa mensajes tipo "You have reached your
+# quota limit. Google is rate limiting your requests." — sin el código 429.
+# Detectar ambos es crítico: el backoff de _fetch_with_retry solo se activa si
+# se reconoce el rate-limit como tal.
+_RATE_LIMIT_MARKERS = (
+    '429',
+    'too many requests',
+    'quota limit',
+    'rate limiting',
+    'rate limited',
+)
+
+
+def _is_rate_limit_error(error: Exception) -> bool:
+    """True si la excepción corresponde a un rate-limit de Google Trends."""
+    s = str(error).lower()
+    return any(marker in s for marker in _RATE_LIMIT_MARKERS)
+
+
 @dataclass
 class TrendData:
     """Estructura para almacenar datos de tendencias."""
@@ -222,7 +242,7 @@ class TrendsScraper:
             try:
                 return fetch_func()
             except Exception as e:
-                if '429' in str(e):
+                if _is_rate_limit_error(e):
                     if attempt < max_retries - 1:
                         # Backoff exponencial con límite máximo
                         # Base: 60s, luego 120s, pero nunca más de MAX_BACKOFF
@@ -339,7 +359,7 @@ class TrendsScraper:
         """
         error_str = str(error).lower()
 
-        if '429' in error_str or 'too many requests' in error_str:
+        if _is_rate_limit_error(error):
             return ErrorType.RATE_LIMIT
         elif 'empty' in error_str or 'no data' in error_str or 'none' in error_str:
             return ErrorType.NO_DATA
