@@ -194,7 +194,11 @@ class TrendsDatabase:
                  item.data_type, item.title, str(item.value), item.link, run_group)
             )
 
-            # Actualizar apps_seen
+            # Actualizar apps_seen — excluye trending_rss: son búsquedas
+            # generales (deportes, noticias), no candidatas a app, y
+            # contaminarían la detección de novedades
+            if item.data_type == 'trending_rss':
+                continue
             normalized = self._normalize_title(item.title)
             if normalized and len(normalized) > 2:
                 self._upsert_app_seen(normalized, item.title, item.country_code, now_iso)
@@ -362,7 +366,9 @@ class TrendsDatabase:
         like_prefix = f"{normalized}%"
         like_word = f"% {normalized}%"
 
-        velocity_where = "(lower(title) LIKE ? OR lower(title) LIKE ?)"
+        # trending_rss excluido: la velocidad mide señal de queries, no RSS
+        velocity_where = ("(lower(title) LIKE ? OR lower(title) LIKE ?) "
+                          "AND data_type != 'trending_rss'")
 
         # Apariciones últimas 24h
         last_24h = self.conn.execute(
@@ -468,6 +474,7 @@ class TrendsDatabase:
                       GROUP_CONCAT(DISTINCT data_type) as types
                FROM trends
                WHERE {where}
+               AND data_type != 'trending_rss'
                GROUP BY lower(title)
                ORDER BY cnt DESC
                LIMIT ?""",
@@ -549,6 +556,7 @@ class TrendsDatabase:
             f"""SELECT country_code, COUNT(*) as cnt
                FROM trends
                WHERE {where}
+               AND data_type != 'trending_rss'
                GROUP BY country_code
                ORDER BY cnt DESC""",
             params
@@ -574,24 +582,30 @@ class TrendsDatabase:
             start, end = self._day_bounds(date)
             prev_start = (datetime.strptime(date, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
 
+            # trending_rss excluido para que el volumen sea comparable
+            # con el histórico (que solo contiene queries)
             today = self.conn.execute(
-                "SELECT COUNT(*) FROM trends WHERE timestamp >= ? AND timestamp < ?",
+                """SELECT COUNT(*) FROM trends WHERE timestamp >= ? AND timestamp < ?
+                   AND data_type != 'trending_rss'""",
                 (start, end)
             ).fetchone()[0]
 
             yesterday = self.conn.execute(
-                "SELECT COUNT(*) FROM trends WHERE timestamp >= ? AND timestamp < ?",
+                """SELECT COUNT(*) FROM trends WHERE timestamp >= ? AND timestamp < ?
+                   AND data_type != 'trending_rss'""",
                 (prev_start, start)
             ).fetchone()[0]
         else:
             today = self.conn.execute(
-                "SELECT COUNT(*) FROM trends WHERE timestamp >= datetime('now', '-1 day')"
+                """SELECT COUNT(*) FROM trends WHERE timestamp >= datetime('now', '-1 day')
+                   AND data_type != 'trending_rss'"""
             ).fetchone()[0]
 
             yesterday = self.conn.execute(
                 """SELECT COUNT(*) FROM trends
                    WHERE timestamp >= datetime('now', '-2 days')
-                   AND timestamp < datetime('now', '-1 day')"""
+                   AND timestamp < datetime('now', '-1 day')
+                   AND data_type != 'trending_rss'"""
             ).fetchone()[0]
 
         change = ((today - yesterday) / yesterday * 100) if yesterday > 0 else 0.0
