@@ -7,17 +7,17 @@ Sistema automatizado para extraer datos de Google Trends y exportarlos a Google 
 <!-- DASHBOARD:START -->
 ## Dashboard
 
-**Ultima actualizacion:** 2026-07-10 23:51 UTC
+**Ultima actualizacion:** 2026-07-11 23:45 UTC
 
-**Volumen hoy:** 681 registros (-15.8% vs ayer)
+**Volumen hoy:** 1249 registros (+83.4% vs ayer)
 
 **Top 5 apps del dia:**
 
-1. **minecraft** — 12x (WW, MX, PH)
-2. **apk pure** — 9x (ID, VN, DE)
-3. **whatsapp download** — 8x (WW, US, NG)
-4. **tiktok download apk** — 8x (WW, PH, NG)
-5. **whatsapp download apk** — 7x (WW, ID, NG)
+1. **minecraft** — 20x (WW, IN, US)
+2. **apkpure** — 19x (WW, US, BR)
+3. **youtube download apk** — 15x (WW, IN, ID)
+4. **tiktok download apk** — 15x (WW, US, ID)
+5. **whatsapp apk** — 13x (WW, BR, ID)
 
 [Ver digest completo](reports/latest.md)
 <!-- DASHBOARD:END -->
