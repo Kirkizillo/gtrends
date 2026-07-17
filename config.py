@@ -87,6 +87,17 @@ PROXIES = os.getenv("PROXIES", "").split(",") if os.getenv("PROXIES") else []
 TURSO_DATABASE_URL = os.getenv("TURSO_DATABASE_URL", "")
 TURSO_AUTH_TOKEN = os.getenv("TURSO_AUTH_TOKEN", "")
 
+# Retención de datos en Turso. El plan free tiene cuotas ajustadas de
+# almacenamiento y lecturas mensuales (en jul-2026 se agotaron y Turso
+# bloqueó hasta los reads). 180 días cubren el análisis semanal/mensual;
+# Google Sheets conserva el histórico completo.
+TRENDS_RETENTION_DAYS = 180
+
+# Insertar filas del RSS de Trending Now en Turso. Desactivado: no alimentan
+# ninguna señal (novelty/velocity/digest las excluyen) y Sheets ya las
+# archiva — en Turso solo consumen almacenamiento y cuota de escritura.
+STORE_RSS_IN_TURSO = False
+
 # Distribución de requests
 # Divide los países en grupos para ejecutar en diferentes horarios
 # 20 regiones / 5 grupos = 4 regiones por grupo

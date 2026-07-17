@@ -612,15 +612,24 @@ class ReportGenerator:
 
     def _enrich_with_db(self, items: List[ReportItem]):
         """Enriquece ReportItems con novelty y velocity desde Turso."""
+        # Velocity en batch: una sola lectura de la ventana de 14 días para
+        # todos los items (la versión por-item hacía 4 escaneos LIKE cada una
+        # y agotó la cuota mensual de lecturas de Turso en jul-2026)
+        try:
+            velocities = self.db.get_velocities_batch([item.name for item in items])
+        except Exception as e:
+            logger.warning(f"Velocity batch falló: {e}")
+            velocities = {}
+
         for item in items:
             try:
-                # Novelty detection
+                # Novelty detection (lookup por clave primaria, barato)
                 status, first_seen = self.db.get_novelty_status(item.name)
                 item.novelty = status
                 item.first_seen = first_seen
 
-                # Trend velocity
-                velocity = self.db.get_velocity(item.name)
+                # Trend velocity (del batch)
+                velocity = velocities.get(item.name, {})
                 item.velocity = velocity.get('trend', '')
                 item.velocity_change = velocity.get('change_24h', 0.0)
             except Exception as e:

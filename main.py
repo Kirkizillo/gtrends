@@ -384,8 +384,10 @@ def run_monitor(logger, include_topics: bool = False, include_interest: bool = F
                         logger.error(f"  Error exportando RSS: {e}")
                         save_backup(rss_result.data, f"emergency_rss_{geo}")
 
-                    # Insertar en Turso (no bloquea si falla)
-                    if db_connected:
+                    # Insertar en Turso solo si está habilitado — por defecto
+                    # NO: las filas RSS no alimentan ninguna señal y solo
+                    # consumen cuota (Sheets ya las archiva)
+                    if db_connected and getattr(config, 'STORE_RSS_IN_TURSO', False):
                         try:
                             db.insert_trends(rss_result.data, run_group=group)
                         except Exception as e:

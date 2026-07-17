@@ -42,13 +42,33 @@ def fetch_digest_data(db: TrendsDatabase, date: str = None) -> dict:
     if date is None:
         date = datetime.utcnow().strftime("%Y-%m-%d")
 
-    return {
+    # Cada query se protege individualmente: Turso puede aceptar la conexión
+    # pero rechazar las lecturas (p.ej. "reads are blocked" por cuota agotada).
+    # El digest NUNCA debe tumbar el run: sin datos → digest degradado, pero
+    # el commit de keepalive se produce igualmente.
+    # Sin conexión las queries devuelven vacío sin lanzar excepción → el modo
+    # degradado debe activarse ya desde aquí.
+    degraded = not db.is_connected
+
+    def _safe(fetch, default):
+        nonlocal degraded
+        try:
+            return fetch()
+        except Exception as e:
+            logger.warning(f"Query de digest falló (modo degradado): {e}")
+            degraded = True
+            return default
+
+    data = {
         'date': date,
-        'top_apps': db.get_today_top_apps(limit=15, date=date),
-        'new_apps': db.get_today_new_apps(date=date),
-        'region_activity': db.get_region_activity(date=date),
-        'comparison': db.get_daily_comparison(date=date),
+        'top_apps': _safe(lambda: db.get_today_top_apps(limit=15, date=date), []),
+        'new_apps': _safe(lambda: db.get_today_new_apps(date=date), []),
+        'region_activity': _safe(lambda: db.get_region_activity(date=date), []),
+        'comparison': _safe(lambda: db.get_daily_comparison(date=date),
+                            {'today': 0, 'yesterday': 0, 'change_pct': 0.0}),
     }
+    data['degraded'] = degraded
+    return data
 
 
 def generate_digest(db: TrendsDatabase, date: str = None) -> str:
@@ -291,6 +311,18 @@ def generate_digest_markdown(data: dict) -> str:
         "",
         f"Generado: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}",
         "",
+    ]
+
+    if data.get('degraded'):
+        lines += [
+            "> ⚠️ **Modo degradado**: Turso no estaba disponible al generar este "
+            "digest (cuota agotada o servicio caído). Los datos del día están en "
+            "Google Sheets; este informe se emite igualmente para mantener vivo "
+            "el workflow.",
+            "",
+        ]
+
+    lines += [
         "## Volumen del Dia",
         "",
         f"| Hoy | Ayer | Cambio |",
@@ -441,8 +473,9 @@ def notify_slack_success(data: dict) -> bool:
     top = data.get('top_apps') or []
     new_apps = data.get('new_apps') or []
     top_names = ", ".join(str(a.get('display_name', a.get('title', '?'))) for a in top[:5])
+    header = ":warning: *Digest DEGRADADO" if data.get('degraded') else ":chart_with_upwards_trend: *Digest"
     text = (
-        f":chart_with_upwards_trend: *Digest {data.get('date')}* — "
+        f"{header} {data.get('date')}* — "
         f"{comp.get('today', 0)} filas ({comp.get('change_pct', 0.0):+.1f}% vs ayer), "
         f"{len(new_apps)} apps nuevas.\n"
         f"Top: {top_names or 'sin datos'}\n"
@@ -470,12 +503,27 @@ def main():
     # El embedded replica descargaba la BD entera (~107k filas) y agotaba
     # la cuota mensual del plan free de Turso hacia el día 9-10 del mes.
     db = TrendsDatabase()
-    if not db.connect(remote_only=True):
-        logger.error("No se pudo conectar a Turso. Verifica credenciales.")
-        sys.exit(1)
+    connected = db.connect(remote_only=True)
+    if not connected:
+        # NO abortamos: un Turso caído/bloqueado no debe tumbar el digest.
+        # Se genera un digest degradado y el commit de keepalive se produce
+        # igualmente (si abortáramos, el repo dejaría de tener actividad y
+        # GitHub desactivaría el workflow a los 60 días — lo que mató el
+        # proyecto en mayo de 2026).
+        logger.error("Turso no disponible — generando digest degradado sin datos")
 
     # Retención: acota el tamaño de la BD y el egress de sync de las replicas
-    db.purge_old_trends(days=365)
+    if connected:
+        db.purge_old_trends(days=config.TRENDS_RETENTION_DAYS)
+        size_mb = db.get_db_size_mb()
+        if size_mb > 0:
+            logger.info(f"Tamaño actual de la BD Turso: {size_mb} MB")
+            if size_mb > 400:
+                logger.warning(
+                    f"CAPACIDAD TURSO: la BD ocupa {size_mb} MB — revisar el "
+                    f"plan free y considerar bajar TRENDS_RETENTION_DAYS "
+                    f"(actual: {config.TRENDS_RETENTION_DAYS})"
+                )
 
     # Obtener datos una vez, renderizar dos veces (HTML + Markdown)
     logger.info("Generando digest diario...")
@@ -507,8 +555,13 @@ def main():
             f.write(markdown)
     logger.info(f"Digest Markdown guardado: {md_path} (+ latest.md)")
 
-    # Actualizar dashboard del README y limpiar reports antiguos
-    update_readme_dashboard(data)
+    # Actualizar dashboard del README y limpiar reports antiguos.
+    # En modo degradado NO se pisa el dashboard: conserva los últimos
+    # datos buenos en vez de mostrar ceros.
+    if not data.get('degraded'):
+        update_readme_dashboard(data)
+    else:
+        logger.warning("Modo degradado: se conserva el dashboard anterior del README")
     prune_old_reports(reports_dir, days=90)
 
     # Notificación de éxito (opcional, requiere SLACK_WEBHOOK_URL)
@@ -516,7 +569,7 @@ def main():
 
     # Informe semanal: se genera los domingos o con --weekly
     is_sunday = datetime.utcnow().weekday() == 6
-    if is_sunday or args.weekly:
+    if (is_sunday or args.weekly) and connected and not data.get('degraded'):
         logger.info("Generando informe semanal...")
         try:
             from weekly_report import save_weekly_report
@@ -524,8 +577,11 @@ def main():
             logger.info(f"Informe semanal guardado: {weekly_path}")
         except Exception as e:
             logger.error(f"Error generando informe semanal: {e}")
+    elif is_sunday or args.weekly:
+        logger.warning("Informe semanal omitido: Turso no disponible")
 
-    db.close()
+    if connected:
+        db.close()
 
 
 if __name__ == "__main__":

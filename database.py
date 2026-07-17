@@ -428,6 +428,93 @@ class TrendsDatabase:
             'change_24h': round(change_24h, 1)
         }
 
+    def get_velocities_batch(self, titles: List[str]) -> dict:
+        """
+        Versión batch de get_velocity(): UNA sola lectura de la ventana de
+        14 días para todas las apps, con el conteo hecho en Python.
+
+        Motivación (jul-2026): get_velocity() hace 4 escaneos LIKE por app.
+        Con ~30 apps × 10 runs/día eso son cientos de escaneos diarios que
+        agotaron la cuota mensual de lecturas del plan free de Turso
+        (bloqueó hasta los reads). Esta versión reduce las lecturas ~100×.
+
+        Args:
+            titles: Títulos a analizar (se normalizan internamente)
+
+        Returns:
+            Dict {titulo_original: velocity_dict} con el mismo formato
+            que get_velocity()
+        """
+        empty = {'trend': 'desconocido', 'last_24h': 0, 'prev_24h': 0,
+                 'last_7d': 0, 'prev_7d': 0, 'change_24h': 0.0}
+
+        if not titles:
+            return {}
+        if not self.is_connected:
+            return {t: dict(empty) for t in titles}
+
+        # Normalizar una vez; descartar títulos sin forma normalizada
+        norm_map = {}  # titulo original -> normalizado
+        for t in titles:
+            n = self._normalize_title(t)
+            if n:
+                norm_map[t] = n
+
+        result = {t: dict(empty) for t in titles}
+        if not norm_map:
+            return result
+
+        # UNA lectura: títulos y timestamps de los últimos 14 días
+        now = datetime.now(timezone.utc)
+        cutoff_14d = (now - timedelta(days=14)).strftime("%Y-%m-%d %H:%M:%S")
+        rows = self.conn.execute(
+            """SELECT lower(title), timestamp FROM trends
+               WHERE timestamp >= ?
+               AND data_type != 'trending_rss'""",
+            (cutoff_14d,)
+        ).fetchall()
+
+        # Límites de ventana como strings (mismos formatos que la tabla)
+        b_1d = (now - timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
+        b_2d = (now - timedelta(days=2)).strftime("%Y-%m-%d %H:%M:%S")
+        b_7d = (now - timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
+
+        # Conteo en Python con la misma semántica que los patrones LIKE:
+        # prefix ("capcut%") o word-boundary ("% capcut%")
+        for orig, norm in norm_map.items():
+            counts = result[orig]
+            word = f" {norm}"
+            for title_lower, ts in rows:
+                if not (title_lower.startswith(norm) or word in title_lower):
+                    continue
+                if ts >= b_1d:
+                    counts['last_24h'] += 1
+                elif ts >= b_2d:
+                    counts['prev_24h'] += 1
+                if ts >= b_7d:
+                    counts['last_7d'] += 1
+                else:
+                    counts['prev_7d'] += 1
+
+            # Misma clasificación que get_velocity()
+            if counts['prev_24h'] > 0:
+                change = ((counts['last_24h'] - counts['prev_24h'])
+                          / counts['prev_24h']) * 100
+            elif counts['last_24h'] > 0:
+                change = 100.0
+            else:
+                change = 0.0
+
+            if change > 20:
+                counts['trend'] = 'acelerando'
+            elif change < -20:
+                counts['trend'] = 'decayendo'
+            else:
+                counts['trend'] = 'estable'
+            counts['change_24h'] = round(change, 1)
+
+        return result
+
     # =========================================================================
     # Consultas para digest diario
     # =========================================================================
@@ -808,11 +895,35 @@ class TrendsDatabase:
                 self.conn.commit()
                 self._sync()
 
+                # DELETE no devuelve espacio al plan — solo VACUUM compacta
+                # el fichero. Turso puede no soportarlo según versión del
+                # servidor: intentar y degradar con aviso.
+                try:
+                    self.conn.execute("VACUUM")
+                    logger.info("VACUUM ejecutado (BD compactada)")
+                except Exception as e:
+                    logger.warning(f"VACUUM no soportado/falló (el espacio no se compacta): {e}")
+
             logger.info(f"Retención: {to_delete} filas eliminadas de trends (>{days} días)")
             return to_delete
         except Exception as e:
             logger.warning(f"Error en purge_old_trends: {e}")
             return 0
+
+    def get_db_size_mb(self) -> float:
+        """
+        Tamaño aproximado de la BD en MB (page_count × page_size).
+        Devuelve -1 si no se puede consultar.
+        """
+        if not self.is_connected:
+            return -1.0
+        try:
+            pages = self.conn.execute("PRAGMA page_count").fetchone()[0]
+            size = self.conn.execute("PRAGMA page_size").fetchone()[0]
+            return round(pages * size / (1024 * 1024), 1)
+        except Exception as e:
+            logger.warning(f"No se pudo consultar el tamaño de la BD: {e}")
+            return -1.0
 
     # =========================================================================
     # Utilidades
