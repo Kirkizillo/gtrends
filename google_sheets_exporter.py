@@ -242,15 +242,19 @@ class GoogleSheetsExporter:
     def export_report_to_sheet(self, headers: List[str], rows: List[List[str]],
                                 timestamp: datetime = None) -> Optional[str]:
         """
-        Exporta un informe a una pestaña individual con formato de fecha legible.
+        Exporta un informe a una pestaña diaria (una pestaña por día).
+
+        Si la pestaña del día no existe, se crea. Si ya existe (runs
+        posteriores del mismo día), el informe se agrega debajo del contenido
+        existente, precedido por una fila separadora con la hora del run.
 
         Args:
             headers: Lista de headers para la pestaña
             rows: Lista de filas de datos
-            timestamp: Timestamp para el nombre (default: ahora)
+            timestamp: Timestamp para el nombre y la hora del run (default: ahora)
 
         Returns:
-            Nombre de la pestaña creada o None si hay error
+            Nombre de la pestaña usada o None si hay error
         """
         if not self.spreadsheet:
             if not self.connect():
@@ -259,33 +263,52 @@ class GoogleSheetsExporter:
         if timestamp is None:
             timestamp = datetime.now()
 
-        # Formato legible: Inf_2026-01-29_12:54
-        sheet_name = timestamp.strftime("Inf_%Y-%m-%d_%H:%M")
+        # Formato diario: Inf_2026-01-29 (una pestaña por día, no por run)
+        sheet_name = timestamp.strftime("Inf_%Y-%m-%d")
 
         try:
             # Determinar número de columnas (de headers o de la primera fila)
             num_cols = len(headers) if headers else (len(rows[0]) if rows else 6)
 
-            # Crear pestaña nueva
-            worksheet = self.spreadsheet.add_worksheet(
-                title=sheet_name,
-                rows=max(len(rows) + 10, 100),
-                cols=num_cols
-            )
+            try:
+                # Pestaña del día ya existe → append debajo del contenido
+                worksheet = self.spreadsheet.worksheet(sheet_name)
 
-            # Agregar headers solo si existen
-            if headers:
-                worksheet.append_row(headers)
+                # Separador con la hora del run para distinguir cada bloque
+                separator = timestamp.strftime("═══ Run %H:%M UTC ═══")
+                block = [[""], [separator]]
+                if headers:
+                    block.append(headers)
+                block.extend(rows)
 
-            # Agregar datos
-            if rows:
-                worksheet.append_rows(rows, value_input_option='RAW')
+                # append_rows agrega debajo de la última fila con datos
+                worksheet.append_rows(block, value_input_option='RAW')
+                logger.info(
+                    f"Informe agregado a pestaña existente '{sheet_name}' "
+                    f"({len(rows)} filas, separador {timestamp.strftime('%H:%M')} UTC)"
+                )
 
-            # Mover pestaña a posición 2 (después de Related_Queries_Rising)
-            # para que los informes más recientes aparezcan primero
-            worksheet.update_index(2)
+            except gspread.exceptions.WorksheetNotFound:
+                # Primera vez hoy → crear pestaña nueva
+                worksheet = self.spreadsheet.add_worksheet(
+                    title=sheet_name,
+                    rows=max(len(rows) + 10, 100),
+                    cols=num_cols
+                )
 
-            logger.info(f"Informe exportado a pestaña '{sheet_name}' ({len(rows)} filas)")
+                # Agregar headers solo si existen
+                if headers:
+                    worksheet.append_row(headers)
+
+                # Agregar datos
+                if rows:
+                    worksheet.append_rows(rows, value_input_option='RAW')
+
+                # Mover pestaña a posición 2 (después de Related_Queries_Rising)
+                # para que los informes más recientes aparezcan primero
+                worksheet.update_index(2)
+
+                logger.info(f"Informe exportado a pestaña nueva '{sheet_name}' ({len(rows)} filas)")
 
             # Limpiar pestañas de informe antiguas
             self._cleanup_old_report_tabs()
@@ -293,25 +316,43 @@ class GoogleSheetsExporter:
             return sheet_name
 
         except Exception as e:
-            logger.error(f"Error creando pestaña de informe: {e}")
+            logger.error(f"Error exportando pestaña de informe: {e}")
             return None
+
+    @staticmethod
+    def _parse_report_tab_date(title: str) -> Optional[str]:
+        """
+        Extrae la fecha (YYYY-MM-DD) de una pestaña de informe.
+        Acepta ambos formatos:
+          - Nuevo: Inf_YYYY-MM-DD
+          - Legacy: Inf_YYYY-MM-DD_HH:MM
+        Retorna None si el título no es una pestaña de informe válida.
+        """
+        if not title.startswith("Inf_") or len(title) < 14:
+            return None
+        tab_date = title[4:14]  # Extraer YYYY-MM-DD
+        try:
+            datetime.strptime(tab_date, "%Y-%m-%d")
+        except ValueError:
+            return None
+        return tab_date
 
     def _cleanup_old_report_tabs(self, keep_days: int = 7):
         """
         Elimina pestañas de informe (Inf_*) con más de keep_days días.
-        Se ejecuta después de cada export para mantener el spreadsheet limpio.
+        Acepta el formato nuevo (Inf_YYYY-MM-DD) y el legacy
+        (Inf_YYYY-MM-DD_HH:MM) para que las pestañas antiguas también
+        se limpien al envejecer.
         """
         cutoff = (datetime.now() - timedelta(days=keep_days)).strftime("%Y-%m-%d")
         deleted = 0
 
         try:
             for ws in self.spreadsheet.worksheets():
-                # Solo tocar pestañas de informe (formato: Inf_YYYY-MM-DD_HH:MM)
-                if ws.title.startswith("Inf_") and len(ws.title) >= 14:
-                    tab_date = ws.title[4:14]  # Extraer YYYY-MM-DD
-                    if tab_date < cutoff:
-                        self.spreadsheet.del_worksheet(ws)
-                        deleted += 1
+                tab_date = self._parse_report_tab_date(ws.title)
+                if tab_date is not None and tab_date < cutoff:
+                    self.spreadsheet.del_worksheet(ws)
+                    deleted += 1
 
             if deleted:
                 logger.info(f"Cleanup: {deleted} pestañas de informe antiguas eliminadas (>{keep_days} días)")
