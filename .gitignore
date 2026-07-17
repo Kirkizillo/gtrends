@@ -34,3 +34,4 @@ env/
 .DS_Store
 Thumbs.db
 .claude/
+!country_tiers.json

@@ -122,7 +122,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add reports/ README.md
+          git add reports/ README.md country_tiers.json
           git diff --cached --quiet || (git commit -m "chore(digest): daily report $(date -u +%F) [skip ci]" && git pull --rebase origin main && git push)
 
       - name: Upload logs as artifact

@@ -1,0 +1,52 @@
+{
+  "updated": "2026-07-17",
+  "source": "seed estimado desde Sheets (rising 10d x2.5); primera evaluación real: 1 de agosto",
+  "thresholds": {
+    "high_min_rows_day": 15,
+    "medium_min_rows_day": 4
+  },
+  "tiers": {
+    "WW": "high",
+    "IN": "high",
+    "US": "high",
+    "BR": "high",
+    "ID": "high",
+    "MX": "high",
+    "PH": "high",
+    "TR": "high",
+    "VN": "high",
+    "NG": "high",
+    "CO": "high",
+    "TH": "medium",
+    "FR": "medium",
+    "IT": "medium",
+    "RU": "low",
+    "GB": "low",
+    "DE": "low",
+    "JP": "low",
+    "RO": "low",
+    "AU": "low"
+  },
+  "stats": {
+    "WW": {"rows_30d_est": 2093},
+    "IN": {"rows_30d_est": 3045},
+    "US": {"rows_30d_est": 1485},
+    "BR": {"rows_30d_est": 2490},
+    "ID": {"rows_30d_est": 1898},
+    "MX": {"rows_30d_est": 1695},
+    "PH": {"rows_30d_est": 2520},
+    "TR": {"rows_30d_est": 2258},
+    "VN": {"rows_30d_est": 1853},
+    "NG": {"rows_30d_est": 945},
+    "CO": {"rows_30d_est": 938},
+    "TH": {"rows_30d_est": 375},
+    "FR": {"rows_30d_est": 270},
+    "IT": {"rows_30d_est": 240},
+    "RU": {"rows_30d_est": 113},
+    "GB": {"rows_30d_est": 113},
+    "DE": {"rows_30d_est": 83},
+    "JP": {"rows_30d_est": 53},
+    "RO": {"rows_30d_est": 30},
+    "AU": {"rows_30d_est": 8}
+  }
+}

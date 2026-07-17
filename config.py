@@ -112,6 +112,21 @@ COUNTRY_GROUPS = {
 }
 
 # =============================================================================
+# Frecuencia adaptativa de escaneo por país (tiers)
+# =============================================================================
+
+# Fichero con la asignación de tier por país (junto a main.py).
+# Se reevalúa mensualmente desde digest.py (día 1 de cada mes o --retier)
+# con el volumen real de filas de los últimos 30 días en Turso.
+TIERS_FILE = "country_tiers.json"
+
+# Umbrales de filas/día para asignar tier:
+#   high   → >= 15 filas/día  → 2 escaneos/día (sin cambios)
+#   medium → >= 4 filas/día   → 1 escaneo/día (solo el run de mañana, <12h UTC)
+#   low    → < 4 filas/día    → ~2 escaneos/semana (mañana + día del año % 3 == 0)
+TIER_THRESHOLDS = {"high_min_rows_day": 15, "medium_min_rows_day": 4}
+
+# =============================================================================
 # Configuración de Google Sheets
 # =============================================================================
 

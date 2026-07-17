@@ -25,6 +25,72 @@ from html_report import save_html_report
 from rss_trends import fetch_trending_rss, is_geo_supported
 
 
+def load_country_tiers(path: str = None) -> dict:
+    """
+    Carga country_tiers.json (asignación de tier de frecuencia por país).
+
+    Args:
+        path: Ruta al fichero (default: junto a main.py, config.TIERS_FILE)
+
+    Returns:
+        Dict con el contenido del JSON, o {} si falta o está corrupto
+        (fail-safe: sin fichero, todos los países se escanean siempre).
+    """
+    logger = logging.getLogger(__name__)
+    if path is None:
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), config.TIERS_FILE)
+
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            logger.warning(f"country_tiers.json con formato inesperado — se ignoran los tiers")
+            return {}
+        return data
+    except FileNotFoundError:
+        logger.warning(f"country_tiers.json no encontrado ({path}) — todos los países se escanean")
+        return {}
+    except (json.JSONDecodeError, OSError, ValueError) as e:
+        logger.warning(f"country_tiers.json corrupto/ilegible — todos los países se escanean: {e}")
+        return {}
+
+
+def should_scan_country(geo: str, tiers: dict, now_utc: datetime) -> tuple:
+    """
+    Decide si un país debe escanearse en este run según su tier.
+
+    Cada grupo tiene un run de mañana (<12h UTC) y otro de tarde/noche:
+      - high (o desconocido): siempre → 2 escaneos/día (fail-safe)
+      - medium: solo el run de mañana → 1 escaneo/día
+      - low: solo mañanas y cuando el día del año es múltiplo de 3
+        → ~2 escaneos/semana
+
+    Args:
+        geo: Código de país (ej. 'IN')
+        tiers: Dict de load_country_tiers()
+        now_utc: Datetime actual en UTC
+
+    Returns:
+        Tupla (escanear: bool, motivo: str)
+    """
+    tier = (tiers.get('tiers') or {}).get(geo, 'high')
+
+    if tier == 'medium':
+        if now_utc.hour < 12:
+            return (True, "medium: run de mañana")
+        return (False, "medium: solo se escanea en el run de mañana (<12h UTC)")
+
+    if tier == 'low':
+        if now_utc.hour >= 12:
+            return (False, "low: solo se escanea en el run de mañana (<12h UTC)")
+        if now_utc.timetuple().tm_yday % 3 != 0:
+            return (False, "low: solo se escanea cada 3 días (día del año % 3 == 0)")
+        return (True, "low: mañana y día apto")
+
+    # high o tier desconocido → siempre (fail-safe)
+    return (True, f"{tier}: se escanea siempre")
+
+
 def setup_logging():
     """Configura el sistema de logging."""
     # Crear directorio de logs si no existe
@@ -263,15 +329,33 @@ def run_monitor(logger, include_topics: bool = False, include_interest: bool = F
     export_counts = {}
     failed_combinations = []  # Tracking failed term/region combinations
     all_data = []  # Acumular todos los datos para el informe
+    rss_titles = []  # Titulares del feed RSS del grupo (para el informe)
+
+    # Frecuencia adaptativa: decidir qué países se omiten en este run según
+    # su tier (los omitidos NO cuentan en total_combinations para que el
+    # success_rate siga siendo honesto)
+    tiers = load_country_tiers()
+    now_utc = datetime.utcnow()
+    skipped_regions = {}
+    for geo in regions:
+        scan, reason = should_scan_country(geo, tiers, now_utc)
+        if not scan:
+            tier = (tiers.get('tiers') or {}).get(geo, 'high')
+            skipped_regions[geo] = reason
+            logger.info(f"Tier {tier}: se omite {geo} ({reason})")
 
     total_combinations = sum(
         len(terms) + len(config.COUNTRY_EXTRA_TERMS.get(geo, []))
         for geo in regions
+        if geo not in skipped_regions
     )
     current = 0
 
-    logger.info(f"\nIniciando scraping incremental: {total_combinations} combinaciones en {len(regions)} países")
+    logger.info(f"\nIniciando scraping incremental: {total_combinations} combinaciones en "
+                f"{len(regions) - len(skipped_regions)} países ({len(skipped_regions)} omitidos por tier)")
     for geo in regions:
+        if geo in skipped_regions:
+            continue
         country_terms = terms + config.COUNTRY_EXTRA_TERMS.get(geo, [])
         logger.info(f"  {geo}: {len(country_terms)} términos {country_terms}")
 
@@ -282,6 +366,10 @@ def run_monitor(logger, include_topics: bool = False, include_interest: bool = F
     extra_terms_ok = {"apk indir"}
 
     for geo, country_name in regions.items():
+        # Región omitida por tier: ni términos ni RSS
+        if geo in skipped_regions:
+            continue
+
         extra_terms = config.COUNTRY_EXTRA_TERMS.get(geo, [])
         country_terms = terms + extra_terms
         for term in country_terms:
@@ -361,7 +449,9 @@ def run_monitor(logger, include_topics: bool = False, include_interest: bool = F
                         logger.warning(f"  Turso insert falló: {e}")
 
         # Señal complementaria: feed RSS "Trending Now" para esta región
-        # (feed oficial, sin rate limiting, una consulta secuencial por país)
+        # (feed oficial, sin rate limiting, una consulta secuencial por país).
+        # Los titulares NO se exportan a Sheets ni se backupean: se acumulan
+        # y se pasan al generador de informes como contexto del grupo.
         if getattr(config, 'ENABLE_RSS_TRENDS', False):
             if not is_geo_supported(geo):
                 logger.info(f"\nRSS Trending: región {geo} no soportada por el feed, se omite")
@@ -369,29 +459,8 @@ def run_monitor(logger, include_topics: bool = False, include_interest: bool = F
                 logger.info(f"\nRSS Trending para {country_name} ({geo})")
                 rss_result = fetch_trending_rss(geo, country_name)
                 if rss_result.success and rss_result.data:
-                    total_scraped += len(rss_result.data)
-                    try:
-                        rss_counts = exporter.export(rss_result.data)
-                        for sheet, count in rss_counts.items():
-                            export_counts[sheet] = export_counts.get(sheet, 0) + count
-                            total_exported += count
-                        logger.info(f"  RSS exportado: {sum(rss_counts.values())} filas a Sheets")
-
-                        # Guardar backup incremental
-                        save_backup(rss_result.data, f"{group}_rss_{geo}" if group else f"rss_{geo}")
-
-                    except Exception as e:
-                        logger.error(f"  Error exportando RSS: {e}")
-                        save_backup(rss_result.data, f"emergency_rss_{geo}")
-
-                    # Insertar en Turso solo si está habilitado — por defecto
-                    # NO: las filas RSS no alimentan ninguna señal y solo
-                    # consumen cuota (Sheets ya las archiva)
-                    if db_connected and getattr(config, 'STORE_RSS_IN_TURSO', False):
-                        try:
-                            db.insert_trends(rss_result.data, run_group=group)
-                        except Exception as e:
-                            logger.warning(f"  Turso insert RSS falló: {e}")
+                    rss_titles.extend(item.title for item in rss_result.data)
+                    logger.info(f"  RSS: {len(rss_result.data)} titulares acumulados para el informe")
                 else:
                     logger.warning(f"  RSS fallido para {geo}: {rss_result.error_message}")
 
@@ -462,7 +531,7 @@ def run_monitor(logger, include_topics: bool = False, include_interest: bool = F
         logger.info("="*50)
 
         report_generator = ReportGenerator(db=db if db_connected else None)
-        report = report_generator.generate(all_data, group=group)
+        report = report_generator.generate(all_data, group=group, rss_titles=rss_titles)
 
         # Mostrar resumen ejecutivo
         if report.executive_summary:
@@ -495,7 +564,8 @@ def run_monitor(logger, include_topics: bool = False, include_interest: bool = F
             logger.warning(f"No se pudo generar informe HTML: {e}")
 
         # Exportar informe a pestaña individual en Google Sheets (formato rico)
-        if report.potential_apps or report.watchlist_apps:
+        # Incluye casino_apps: un run con solo items casino también debe exportar
+        if report.potential_apps or report.watchlist_apps or getattr(report, 'casino_apps', None):
             try:
                 sheet_rows = report_generator.format_sheet_rows(report)
                 sheet_name = exporter.export_report_to_sheet(
@@ -537,7 +607,8 @@ def run_monitor(logger, include_topics: bool = False, include_interest: bool = F
         "apps_detected": len(report.potential_apps) if all_data else 0,
         "watchlist_detected": len(report.watchlist_apps) if all_data else 0,
         "errors_by_type": error_breakdown,
-        "export_by_sheet": export_counts
+        "export_by_sheet": export_counts,
+        "skipped_regions": sorted(skipped_regions.keys())
     }
 
     # Log métricas como JSON

@@ -11,6 +11,7 @@ Uso:
 """
 import argparse
 import glob
+import json
 import logging
 import os
 import sys
@@ -459,6 +460,113 @@ def prune_old_reports(reports_dir: str, days: int = 90):
                 logger.warning(f"No se pudo eliminar {name}: {e}")
 
 
+# =============================================================================
+# Reevaluación mensual de tiers de frecuencia de escaneo
+# =============================================================================
+
+def compute_tier(rows_day: float, thresholds: dict = None) -> str:
+    """
+    Asigna tier según filas/día:
+      high   → >= high_min_rows_day (default 15)
+      medium → >= medium_min_rows_day (default 4)
+      low    → resto
+    """
+    if thresholds is None:
+        thresholds = getattr(config, 'TIER_THRESHOLDS',
+                             {"high_min_rows_day": 15, "medium_min_rows_day": 4})
+    if rows_day >= thresholds.get("high_min_rows_day", 15):
+        return "high"
+    if rows_day >= thresholds.get("medium_min_rows_day", 4):
+        return "medium"
+    return "low"
+
+
+def retier_countries(db: TrendsDatabase, tiers_path: str = None) -> list:
+    """
+    Reevalúa el tier de cada país de config.CURRENT_REGIONS con el volumen
+    real de los últimos 30 días en Turso y reescribe country_tiers.json.
+
+    Una sola query agregada (get_country_volumes_30d); países sin filas
+    cuentan como 0 → low.
+
+    Args:
+        db: TrendsDatabase conectada
+        tiers_path: Ruta al JSON de tiers (default: junto a este script)
+
+    Returns:
+        Lista de cambios [(country, old_tier, new_tier, rows_day)]
+    """
+    if tiers_path is None:
+        tiers_path = os.path.join(os.path.dirname(__file__),
+                                  getattr(config, 'TIERS_FILE', 'country_tiers.json'))
+
+    thresholds = getattr(config, 'TIER_THRESHOLDS',
+                         {"high_min_rows_day": 15, "medium_min_rows_day": 4})
+
+    volumes = db.get_country_volumes_30d()
+
+    # Tiers actuales (para calcular cambios); fichero ausente/corrupto →
+    # se asume 'high' (el mismo fail-safe que should_scan_country)
+    old_tiers = {}
+    try:
+        with open(tiers_path, 'r', encoding='utf-8') as f:
+            old_data = json.load(f)
+        if isinstance(old_data, dict):
+            old_tiers = old_data.get('tiers', {}) or {}
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        logger.warning(f"No se pudo leer {tiers_path} — se asume tier 'high' previo")
+
+    changes = []
+    new_tiers = {}
+    stats = {}
+    for geo in config.CURRENT_REGIONS:
+        rows_30d = int(volumes.get(geo, 0))
+        rows_day_raw = rows_30d / 30.0
+        tier = compute_tier(rows_day_raw, thresholds)
+        rows_day = round(rows_day_raw, 1)
+        new_tiers[geo] = tier
+        stats[geo] = {"rows_30d": rows_30d, "rows_day": rows_day}
+        old_tier = old_tiers.get(geo, 'high')
+        if old_tier != tier:
+            changes.append((geo, old_tier, tier, rows_day))
+
+    payload = {
+        "updated": datetime.utcnow().strftime("%Y-%m-%d"),
+        "source": "reevaluación mensual desde Turso (filas 30d, sin trending_rss)",
+        "thresholds": thresholds,
+        "tiers": new_tiers,
+        "stats": stats,
+    }
+    with open(tiers_path, 'w', encoding='utf-8') as f:
+        json.dump(payload, f, indent=2, ensure_ascii=False)
+        f.write("\n")
+
+    logger.info(f"Tiers reevaluados: {len(changes)} cambios — {tiers_path} actualizado")
+    return changes
+
+
+def format_retier_section(changes: list) -> str:
+    """
+    Sección Markdown '## Cambios de frecuencia de escaneo' para el digest.
+
+    Args:
+        changes: Lista de retier_countries() (puede ser vacía)
+
+    Returns:
+        String Markdown (empieza y termina con salto de línea)
+    """
+    lines = ["", "## Cambios de frecuencia de escaneo", ""]
+    if changes:
+        lines.append("| Pais | Tier anterior | Tier nuevo | Filas/dia (30d) |")
+        lines.append("|------|---------------|------------|-----------------|")
+        for geo, old_tier, new_tier, rows_day in changes:
+            lines.append(f"| {geo} | {old_tier} | {new_tier} | {rows_day} |")
+    else:
+        lines.append("Sin cambios de tier este mes.")
+    lines.append("")
+    return "\n".join(lines)
+
+
 def notify_slack_success(data: dict) -> bool:
     """
     Notificación de éxito a Slack con resumen del digest (TODO.md pendiente).
@@ -497,6 +605,7 @@ def main():
     parser = argparse.ArgumentParser(description="Genera digest diario consolidado")
     parser.add_argument('--date', type=str, help="Fecha YYYY-MM-DD (default: hoy)")
     parser.add_argument('--weekly', action='store_true', help="Forzar generacion de informe semanal")
+    parser.add_argument('--retier', action='store_true', help="Forzar reevaluacion mensual de tiers de escaneo")
     args = parser.parse_args()
 
     # Conectar a Turso en modo remoto: sin replica local ni sync completo.
@@ -531,6 +640,26 @@ def main():
     data = fetch_digest_data(db, date=date_str)
     html = generate_digest_html(data)
     markdown = generate_digest_markdown(data)
+
+    # Reevaluación mensual de tiers: día 1 de cada mes o --retier.
+    # Mismo patrón que el informe semanal: solo con Turso conectado y sin
+    # modo degradado. Cualquier fallo conserva el country_tiers.json anterior.
+    is_first_of_month = datetime.utcnow().day == 1
+    if (is_first_of_month or args.retier) and connected and not data.get('degraded'):
+        logger.info("Reevaluando tiers de frecuencia de escaneo (mensual)...")
+        try:
+            tier_changes = retier_countries(db)
+            section = format_retier_section(tier_changes)
+            # Insertar la sección antes del pie del digest (si existe)
+            footer = "\n---\nGenerado por Google Trends Monitor\n"
+            if markdown.endswith(footer):
+                markdown = markdown[:-len(footer)] + section + footer
+            else:
+                markdown += section
+        except Exception as e:
+            logger.warning(f"Reevaluación de tiers falló — se conserva el JSON anterior: {e}")
+    elif is_first_of_month or args.retier:
+        logger.warning("Reevaluación de tiers omitida: Turso no disponible o modo degradado")
 
     # Guardar HTML en logs/ (artifact efímero)
     output_dir = os.path.join(os.path.dirname(__file__), "logs")
