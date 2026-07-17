@@ -1,6 +1,6 @@
 # Digest Diario - 2026-07-17
 
-Generado: 2026-07-17 11:57 UTC
+Generado: 2026-07-17 23:44 UTC
 
 > ⚠️ **Modo degradado**: Turso no estaba disponible al generar este digest (cuota agotada o servicio caído). Los datos del día están en Google Sheets; este informe se emite igualmente para mantener vivo el workflow.
 
