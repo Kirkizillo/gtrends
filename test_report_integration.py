@@ -161,7 +161,15 @@ def test_report_generation():
     print("=" * 60)
     print()
 
-    generator = ReportGenerator()
+    # Mock de DB con apps conocidas: el detector estricto rescata títulos
+    # pelados (sin token de app) solo si apps_seen los conoce — como en
+    # producción con Turso disponible
+    from unittest.mock import MagicMock
+    mock_db = MagicMock()
+    mock_db.is_known_app.return_value = True
+    mock_db.get_novelty_status.return_value = ('conocida', None)
+    mock_db.get_velocities_batch.return_value = {}
+    generator = ReportGenerator(db=mock_db)
     report = generator.generate(MOCK_DATA, group="group_1")
 
     # Verificar clasificación
@@ -224,8 +232,9 @@ def test_report_generation():
 
     all_ok = True
 
+    app_names_lower = [n.lower() for n in app_names]
     for app in expected_apps:
-        if app in app_names:
+        if app.lower() in app_names_lower:
             print(f"   ✅ '{app}' detectada correctamente")
         else:
             print(f"   ❌ '{app}' NO detectada (debería estar)")

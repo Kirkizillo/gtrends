@@ -267,6 +267,24 @@ class TrendsDatabase:
     # Novelty Detection
     # =========================================================================
 
+    def is_known_app(self, title: str, min_times_seen: int = 2) -> bool:
+        """
+        True si el título corresponde a una app ya vista en apps_seen
+        (min_times_seen o más apariciones). Lookup por clave primaria — barato.
+        Usado por el detector estricto para rescatar títulos pelados de apps
+        conocidas (ej: "telegram" sin token de app).
+        """
+        if not self.is_connected:
+            return False
+        normalized = self._normalize_title(title)
+        if not normalized:
+            return False
+        row = self.conn.execute(
+            "SELECT times_seen FROM apps_seen WHERE title_normalized = ?",
+            (normalized,)
+        ).fetchone()
+        return bool(row and row[0] >= min_times_seen)
+
     def get_novelty_status(self, title: str) -> Tuple[str, Optional[str]]:
         """
         Determina si un título es nuevo, resurgente o conocido.
@@ -702,6 +720,29 @@ class TrendsDatabase:
             'yesterday': yesterday,
             'change_pct': round(change, 1)
         }
+
+    def get_country_volumes_30d(self) -> dict:
+        """
+        Filas por país en los últimos 30 días (excluye trending_rss).
+
+        Una sola query agregada — se usa en la reevaluación mensual de
+        tiers de frecuencia de escaneo (digest.py::retier_countries).
+
+        Returns:
+            Dict {country_code: filas_30d}
+        """
+        if not self.is_connected:
+            return {}
+
+        rows = self.conn.execute(
+            """SELECT country_code, COUNT(*)
+               FROM trends
+               WHERE timestamp >= datetime('now', '-30 days')
+               AND data_type != 'trending_rss'
+               GROUP BY country_code"""
+        ).fetchall()
+
+        return {row[0]: row[1] for row in rows}
 
     # =========================================================================
     # Consultas para informe semanal

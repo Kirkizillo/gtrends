@@ -96,6 +96,55 @@ GENERIC_PATTERNS = [
     r"^\d+(\.\d+)*$",  # Solo números de versión
 ]
 
+# =============================================================================
+# Casino / Betting (sección propia, fuera de apps detectadas)
+# =============================================================================
+
+# Patrones de apps de casino/apuestas. Cuidado con falsos positivos:
+# "roblox", "minecraft" o un número suelto NO deben coincidir.
+CASINO_PATTERNS = re.compile(
+    r"(?:"
+    r"\bbet(?:s|ting)?\b"                     # bet, bets, betting (no "alphabet")
+    r"|\bcasino\b|\bjackpots?\b|\bbingo\b"
+    r"|\bslots?\b|\brummy\b"
+    r"|\bteen\s?patti\b|\baviator\b"
+    r"|\bjeet\w*\b"                           # jeet, jeetwin, jeetbuzz, "365 jeet"
+    r"|\blott(?:ery|o)\b"
+    r"|\bfire\s?kirin\b|\borion\s?stars?\b"
+    r"|\bgame\s?vault\b|\bjuwa\b|\bmilky\s?way\b"
+    r"|\bwinzo\b|\bcash\s?game\b"
+    r"|\b(?:\d+xbet|4rabet|melbet|betway|parimatch|dafabet|linebet|mostbet)\b"
+    # Nombres estilo gambling con prefijo numérico: "789 jackpots", "777win",
+    # "91 club", "bg 678 game", "789bingo". Un número solo no coincide.
+    r"|\b\d{2,4}\s?(?:win|bet|club|game|jackpot|bingo|casino|lotto)s?\b"
+    r"|\bbet\s?\d{2,4}\b"                     # bet365, bet 999
+    r")",
+    re.IGNORECASE
+)
+
+# =============================================================================
+# Detector estricto de apps (evita "Ocular Migraine", "Come", etc.)
+# =============================================================================
+
+# Tokens que indican intención de app/descarga en el título de la query
+# (el texto se compara ya sin diacríticos: aplicación→aplicacion, télécharger→telecharger)
+APP_TOKEN_PATTERN = re.compile(
+    r"\b(?:apk|apps?|download|insta?ll?|aplicacion(?:es)?|aplikasi|indir|"
+    r"baixar|descargar|unduh|telecharger|mod|скачать)\b"
+    r"|pro\s+version",
+    re.IGNORECASE
+)
+
+# Tokens no latinos que se comprueban por substring sobre el título crudo
+# (el tailandés pierde marcas combinantes al quitar diacríticos)
+APP_TOKEN_SUBSTRINGS = ("ดาวน์โหลด",)
+
+# Stoplist explícita: términos que nunca son apps aunque pasen otros filtros
+APP_STOPWORDS = {
+    "come", "lite", "ocular migraine", "news", "weather",
+    "today", "tomorrow", "near me", "meaning",
+}
+
 
 @dataclass
 class ReportItem:
@@ -110,6 +159,10 @@ class ReportItem:
     versions: List[str] = field(default_factory=list)  # Versiones específicas detectadas
     needs_review: bool = False  # Si requiere revisión especial (watchlist)
     review_reason: str = ""  # Razón por la que necesita revisión
+    # Categoría: 'app' (normal) o 'casino' (casino/apuestas, sección propia)
+    category: str = 'app'
+    # Señal RSS: True si el término también aparece en Trending Now de Google
+    rss_trending: bool = False
     # Novelty detection
     novelty: str = ""  # 'nueva' | 'resurgente' | 'conocida' | ''
     first_seen: Optional[str] = None  # Fecha primera vez vista
@@ -140,6 +193,8 @@ class ContentReport:
     watchlist_apps: List[ReportItem] = field(default_factory=list)  # Apps que requieren revisión
     generic_terms: List[ReportItem] = field(default_factory=list)  # Términos genéricos ignorados
     technical_terms: List[ReportItem] = field(default_factory=list)  # Términos técnicos ignorados
+    casino_apps: List[ReportItem] = field(default_factory=list)  # Casino/apuestas (sección propia)
+    no_app_terms: List[ReportItem] = field(default_factory=list)  # Sin señal de app (filtrados)
 
     # Nuevas secciones
     new_apps: List[ReportItem] = field(default_factory=list)  # Apps nunca vistas antes
@@ -392,7 +447,12 @@ class ReportGenerator:
             # Usar el nombre base más común o el más largo
             from collections import Counter
             name_counts = Counter(base_names)
-            most_common = name_counts.most_common(1)[0][0]
+            # Preferir la variante con espacios ("789 bingo" sobre "789bingo"),
+            # luego la más frecuente
+            most_common = max(
+                name_counts.items(),
+                key=lambda kv: (' ' in kv[0], kv[1], len(kv[0]))
+            )[0]
 
             # Si hay un nombre base claro, usarlo
             if most_common:
@@ -450,13 +510,161 @@ class ReportGenerator:
                 return True
         return False
 
-    def generate(self, data: List[TrendData], group: Optional[str] = None) -> ContentReport:
+    @staticmethod
+    def _strip_diacritics(text: str) -> str:
+        """Quita diacríticos (consistente con database._normalize_title)."""
+        text = unicodedata.normalize('NFKD', text)
+        return ''.join(c for c in text if not unicodedata.combining(c))
+
+    def _title_has_app_token(self, title: str) -> bool:
+        """
+        Verifica si un título contiene un token de app/descarga
+        (apk, download, indir, скачать, mod, etc.).
+        """
+        if not title:
+            return False
+        raw = title.lower()
+        # Tokens no latinos: substring sobre el crudo (el tailandés
+        # pierde marcas combinantes al normalizar)
+        for token in APP_TOKEN_SUBSTRINGS:
+            if token in raw:
+                return True
+        stripped = self._strip_diacritics(raw)
+        return bool(APP_TOKEN_PATTERN.search(stripped))
+
+    def _is_casino_term(self, norm_name: str, original_titles: List[str]) -> bool:
+        """
+        Clasifica como casino/apuestas usando el nombre normalizado
+        Y los títulos originales de las queries.
+        """
+        candidates = [norm_name] + [
+            self._strip_diacritics(t.lower()) for t in original_titles
+        ]
+        return any(CASINO_PATTERNS.search(c) for c in candidates if c)
+
+    def _build_token_backed_titles(self, data: List[TrendData]) -> List[str]:
+        """
+        Recolecta los títulos normalizados del batch que SÍ tienen token de app.
+        Sirven de respaldo para títulos sin token ("minecraft" sobrevive porque
+        existe "minecraft son surum apk indir" en el mismo batch).
+        """
+        backed = set()
+        for item in data:
+            if self._title_has_app_token(item.title):
+                normalized = self._strip_diacritics(item.title.lower().strip())
+                normalized = re.sub(r'\s+', ' ', normalized)
+                backed.add(normalized)
+        return list(backed)
+
+    @staticmethod
+    def _is_token_backed(base_name: str, backed_titles: List[str]) -> bool:
+        """
+        True si el nombre base aparece en algún título con token de app del batch.
+        Semántica prefix / word-boundary (igual que database.get_velocity).
+        """
+        if len(base_name) < 2:
+            return False
+        for title in backed_titles:
+            if (title == base_name
+                    or title.startswith(base_name + " ")
+                    or f" {base_name} " in title
+                    or title.endswith(" " + base_name)):
+                return True
+        return False
+
+    def _passes_app_filter(self, norm_name: str, info: Dict,
+                           backed_titles: List[str]) -> bool:
+        """
+        Detector estricto de apps: un título sin token de app solo se acepta
+        si su nombre base aparece con token en otra query del mismo batch,
+        o si trending en 2+ países (ante la duda, mantener).
+        """
+        # Stoplist explícita: nunca son apps
+        if norm_name in APP_STOPWORDS:
+            return False
+        # Tiene token de app en alguno de sus títulos
+        if any(self._title_has_app_token(t) for t in info['original_titles']):
+            return True
+        # Respaldado por otra query del batch con token
+        if self._is_token_backed(norm_name, backed_titles):
+            return True
+        # Ante la duda, mantener: trending en 2+ países es señal suficiente
+        if len(set(info['countries'])) >= 2:
+            return True
+        # Rescate por historial: si es una app ya conocida en apps_seen
+        # (vista 2+ veces), un título pelado sigue siendo señal válida
+        # (ej: "telegram" a secas). Degrada limpio si Turso no está.
+        if self.db is not None:
+            try:
+                if self.db.is_known_app(norm_name):
+                    return True
+            except Exception:
+                pass
+        # Sin señal de app: filtrar (ej: "ocular migraine", "come")
+        return False
+
+    def _format_score(self, item: ReportItem) -> str:
+        """
+        Formatea el score con unidades para renders (no toca datos crudos):
+        - "Breakout" se mantiene como "Breakout"
+        - Rising con valor >= 1000 → "+39,400%"
+        - Top → número plano 0-100
+        """
+        raw = str(item.max_value).strip()
+        if 'breakout' in raw.lower():
+            return "Breakout"
+        numeric, _ = self._parse_value(raw)
+        if item.is_rising and numeric >= 1000:
+            return f"+{numeric:,}%"
+        return raw
+
+    @staticmethod
+    def _sheet_tipo(item: ReportItem) -> str:
+        """Columna Tipo para Sheets, con badge RSS si aplica."""
+        tipo = "🔥 Rising" if item.is_rising else "📈 Top"
+        if item.rss_trending:
+            tipo = tipo.replace(" ", "📰 ", 1)
+        return tipo
+
+    def _match_rss_trending(self, items: List[ReportItem],
+                            rss_titles: Optional[List[str]]) -> List[ReportItem]:
+        """
+        Marca items que también aparecen en Trending Now (RSS) de Google.
+        Match: nombre base igual, prefijo, o palabra dentro del título RSS
+        (misma semántica prefix / " word" que database.get_velocity).
+        """
+        if not rss_titles:
+            return []
+
+        normalized_rss = [self._get_base_app_name(t) for t in rss_titles if t]
+        normalized_rss = [t for t in normalized_rss if t]
+
+        matched = []
+        for item in items:
+            base = self._get_base_app_name(item.name)
+            if len(base) < 3:  # nombres muy cortos generan falsos positivos
+                continue
+            for rss_title in normalized_rss:
+                if (rss_title == base
+                        or rss_title.startswith(base + " ")
+                        or f" {base} " in f" {rss_title} "
+                        or rss_title.endswith(" " + base)):
+                    item.rss_trending = True
+                    matched.append(item)
+                    break
+        return matched
+
+    def generate(self, data: List[TrendData], group: Optional[str] = None,
+                 rss_titles: Optional[List[str]] = None) -> ContentReport:
         """
         Genera un informe a partir de los datos extraídos.
 
         Args:
             data: Lista de TrendData del scraper
             group: Nombre del grupo ejecutado (opcional)
+            rss_titles: Títulos de Trending Now (RSS) de Google para las
+                regiones del grupo (opcional). Los items que coincidan se
+                marcan con rss_trending=True y badge 📰 en los renders.
 
         Returns:
             ContentReport con items clasificados
@@ -473,8 +681,13 @@ class ReportGenerator:
         # Extraer regiones únicas
         regions = list(set(item.country_code for item in data))
 
+        # Títulos con token de app del batch (respaldo para el detector estricto)
+        token_backed_titles = self._build_token_backed_titles(data)
+
         # Primera pasada: agrupar por nombre BASE de app (sin versión)
-        # Esto permite agrupar "terraria 1.4.5" y "terraria 1.4 5" bajo "terraria"
+        # Esto permite agrupar "terraria 1.4.5" y "terraria 1.4 5" bajo "terraria".
+        # La clave de agrupación colapsa espacios ("789 bingo" ≡ "789bingo"),
+        # pero se conserva la variante CON espacios para clasificar y mostrar.
         base_grouped: Dict[str, Dict] = {}
 
         for item in data:
@@ -482,11 +695,15 @@ class ReportGenerator:
             base_name = self._get_base_app_name(item.title)
             normalized = self._normalize_term(base_name)
 
+            # Clave sin espacios: dedup "789 bingo" / "789bingo"
+            key = normalized.replace(' ', '')
+
             # Extraer versión si existe
             version = self._extract_version(item.title)
 
-            if normalized not in base_grouped:
-                base_grouped[normalized] = {
+            if key not in base_grouped:
+                base_grouped[key] = {
+                    'norm_name': normalized,
                     'original_titles': [],
                     'data_types': set(),
                     'countries': [],
@@ -496,25 +713,32 @@ class ReportGenerator:
                     'versions': set(),
                 }
 
-            base_grouped[normalized]['original_titles'].append(item.title)
-            base_grouped[normalized]['data_types'].add(item.data_type)
-            base_grouped[normalized]['countries'].append(item.country_name)
-            base_grouped[normalized]['values'].append(item.value)
-            base_grouped[normalized]['links'].append(item.link)
+            # Preferir la variante normalizada CON espacios para mostrar/clasificar
+            if ' ' in normalized and ' ' not in base_grouped[key]['norm_name']:
+                base_grouped[key]['norm_name'] = normalized
+
+            base_grouped[key]['original_titles'].append(item.title)
+            base_grouped[key]['data_types'].add(item.data_type)
+            base_grouped[key]['countries'].append(item.country_name)
+            base_grouped[key]['values'].append(item.value)
+            base_grouped[key]['links'].append(item.link)
 
             if version:
-                base_grouped[normalized]['versions'].add(version)
+                base_grouped[key]['versions'].add(version)
 
             if 'rising' in item.data_type:
-                base_grouped[normalized]['is_rising'] = True
+                base_grouped[key]['is_rising'] = True
 
         # Clasificar cada término
         potential_apps: List[ReportItem] = []
         watchlist_apps: List[ReportItem] = []
         generic_terms: List[ReportItem] = []
         technical_terms: List[ReportItem] = []
+        casino_apps: List[ReportItem] = []
+        no_app_terms: List[ReportItem] = []
 
-        for normalized, info in base_grouped.items():
+        for _key, info in base_grouped.items():
+            normalized = info['norm_name']
             # Determinar el valor máximo y si es rising
             max_value = "0"
             is_rising = info['is_rising']
@@ -537,6 +761,9 @@ class ReportGenerator:
             # Verificar watchlist
             needs_review, review_reason = self._check_watchlist(normalized)
 
+            # Clasificar casino/apuestas (query original Y nombre normalizado)
+            is_casino = self._is_casino_term(normalized, info['original_titles'])
+
             report_item = ReportItem(
                 name=self._extract_app_name(info['original_titles']),
                 original_titles=info['original_titles'],
@@ -547,7 +774,8 @@ class ReportGenerator:
                 links=info['links'],
                 versions=list(info['versions']),
                 needs_review=needs_review,
-                review_reason=review_reason
+                review_reason=review_reason,
+                category='casino' if is_casino else 'app'
             )
 
             # Clasificar en la categoría apropiada
@@ -555,8 +783,14 @@ class ReportGenerator:
                 technical_terms.append(report_item)
             elif self._is_generic_term(normalized):
                 generic_terms.append(report_item)
+            elif is_casino:
+                # Casino va a su propia sección (fuera de watchlist y apps)
+                casino_apps.append(report_item)
             elif needs_review:
                 watchlist_apps.append(report_item)
+            elif not self._passes_app_filter(normalized, info, token_backed_titles):
+                # Detector estricto: sin señal de app ("ocular migraine", "come")
+                no_app_terms.append(report_item)
             else:
                 potential_apps.append(report_item)
 
@@ -573,25 +807,38 @@ class ReportGenerator:
         watchlist_apps.sort(key=sort_key)
         generic_terms.sort(key=sort_key)
         technical_terms.sort(key=sort_key)
+        casino_apps.sort(key=sort_key)
+        no_app_terms.sort(key=sort_key)
+
+        if no_app_terms:
+            logger.info(
+                f"No-app filtrados ({len(no_app_terms)}): "
+                f"{', '.join(i.name for i in no_app_terms[:10])}"
+            )
 
         # Enriquecer con datos de Turso si está disponible
-        all_actionable = potential_apps + watchlist_apps
+        # (casino incluido: novelty/velocity también son útiles ahí)
+        all_actionable = potential_apps + watchlist_apps + casino_apps
         if self.db and self.db.is_connected and all_actionable:
             self._enrich_with_db(all_actionable)
             # Recalcular spread_score post-enrich (por si el enriquecimiento modificó countries)
             for item in all_actionable:
                 item.spread_score = len(set(item.countries))
 
-        # Clasificar secciones especiales
+        # Señal RSS: marcar items que también están en Trending Now de Google
+        rss_matched = self._match_rss_trending(all_actionable, rss_titles)
+
+        # Clasificar secciones especiales (casino excluido: solo potential_apps)
         new_apps = [item for item in potential_apps if item.novelty == 'nueva']
         global_trends = [item for item in potential_apps if item.spread_score >= 3]
         global_trends.sort(key=lambda x: -x.spread_score)
         accelerating = [item for item in potential_apps if item.velocity == 'acelerando']
         accelerating.sort(key=lambda x: -x.velocity_change)
 
-        # Generar resumen ejecutivo
+        # Generar resumen ejecutivo (sin contar casino)
         executive_summary = self._generate_executive_summary(
-            potential_apps, watchlist_apps, new_apps, global_trends, accelerating
+            potential_apps, watchlist_apps, new_apps, global_trends, accelerating,
+            rss_matched=rss_matched
         )
 
         return ContentReport(
@@ -602,6 +849,8 @@ class ReportGenerator:
             watchlist_apps=watchlist_apps,
             generic_terms=generic_terms,
             technical_terms=technical_terms,
+            casino_apps=casino_apps,
+            no_app_terms=no_app_terms,
             new_apps=new_apps,
             global_trends=global_trends,
             accelerating=accelerating,
@@ -641,10 +890,20 @@ class ReportGenerator:
         watchlist_apps: List[ReportItem],
         new_apps: List[ReportItem],
         global_trends: List[ReportItem],
-        accelerating: List[ReportItem]
+        accelerating: List[ReportItem],
+        rss_matched: Optional[List[ReportItem]] = None
     ) -> List[str]:
         """Genera 3-5 bullets de resumen ejecutivo."""
         summary = []
+
+        # Señal RSS: item también en Trending Now de Google (casino excluido)
+        rss_apps = [i for i in (rss_matched or []) if i.category != 'casino']
+        if rss_apps:
+            top = rss_apps[0]
+            extra = f" (+{len(rss_apps) - 1} más)" if len(rss_apps) > 1 else ""
+            summary.append(
+                f"{top.name} también está en Trending Now de Google (señal fuerte){extra}"
+            )
 
         # Apps nuevas
         if new_apps:
@@ -686,6 +945,10 @@ class ReportGenerator:
             emoji = "📈"
             type_label = "Top"
 
+        # Badge RSS: también en Trending Now de Google
+        if item.rss_trending:
+            emoji += "📰"
+
         # Badge de novedad
         novelty_badge = ""
         if show_novelty and item.novelty == 'nueva':
@@ -700,13 +963,14 @@ class ReportGenerator:
         else:
             countries_str = ', '.join(countries_unique)
 
-        # Valor formateado
-        if 'breakout' in str(item.max_value).lower():
+        # Valor formateado con unidades
+        score = self._format_score(item)
+        if score == "Breakout":
             value_str = "🚀 Breakout"
-        elif str(item.max_value).startswith('+'):
-            value_str = item.max_value
+        elif score.startswith('+'):
+            value_str = score
         else:
-            value_str = f"Score: {item.max_value}"
+            value_str = f"Score: {score}"
 
         # Velocidad
         velocity_str = ""
@@ -808,8 +1072,21 @@ class ReportGenerator:
 
             lines.append("")
 
+        # Casino / Betting (sección propia, al final)
+        if report.casino_apps:
+            lines.append(f"🎰 *CASINO / BETTING ({len(report.casino_apps)})*")
+            lines.append("━" * 30)
+
+            for item in report.casino_apps[:10]:
+                lines.append(self._format_app_line(item))
+
+            if len(report.casino_apps) > 10:
+                lines.append(f"  _...y {len(report.casino_apps) - 10} más_")
+
+            lines.append("")
+
         # Si no hay nada
-        if not report.potential_apps and not report.watchlist_apps:
+        if not report.potential_apps and not report.watchlist_apps and not report.casino_apps:
             lines.append("ℹ️ No se detectaron apps relevantes en esta ejecución")
             lines.append("")
 
@@ -822,6 +1099,12 @@ class ReportGenerator:
             lines.append(f"⏭️ Genéricos ({len(report.generic_terms)}): _{', '.join(generic_names)}_")
             if len(report.generic_terms) > 8:
                 lines.append(f"    _...y {len(report.generic_terms) - 8} más_")
+
+        if report.no_app_terms:
+            no_app_names = [item.name for item in report.no_app_terms[:8]]
+            lines.append(f"🚫 No-app filtrados ({len(report.no_app_terms)}): _{', '.join(no_app_names)}_")
+            if len(report.no_app_terms) > 8:
+                lines.append(f"    _...y {len(report.no_app_terms) - 8} más_")
 
         if report.technical_terms:
             tech_names = [item.name for item in report.technical_terms[:5]]
@@ -864,16 +1147,34 @@ class ReportGenerator:
 
             for item in report.potential_apps:
                 rising_mark = "[RISING]" if item.is_rising else "[TOP]"
+                if item.rss_trending:
+                    rising_mark += " 📰"
                 countries_str = ', '.join(item.countries)
                 lines.append(f"  {rising_mark} {item.name}")
                 lines.append(f"      Países: {countries_str}")
-                lines.append(f"      Valor: {item.max_value}")
+                lines.append(f"      Valor: {self._format_score(item)}")
                 if item.links:
                     lines.append(f"      Link: {item.links[0]}")
                 lines.append("")
         else:
             lines.append("No se detectaron apps/términos relevantes")
             lines.append("")
+
+        # Casino / Betting (sección propia, al final)
+        if report.casino_apps:
+            lines.append(f"🎰 CASINO / BETTING ({len(report.casino_apps)})")
+            lines.append("-" * 40)
+            for item in report.casino_apps:
+                rising_mark = "[RISING]" if item.is_rising else "[TOP]"
+                if item.rss_trending:
+                    rising_mark += " 📰"
+                countries_str = ', '.join(item.countries)
+                lines.append(f"  {rising_mark} {item.name}")
+                lines.append(f"      Países: {countries_str}")
+                lines.append(f"      Valor: {self._format_score(item)}")
+                if item.links:
+                    lines.append(f"      Link: {item.links[0]}")
+                lines.append("")
 
         # Términos genéricos
         if report.generic_terms:
@@ -883,6 +1184,16 @@ class ReportGenerator:
             lines.append(f"  {', '.join(generic_names)}")
             if len(report.generic_terms) > 10:
                 lines.append(f"  ...y {len(report.generic_terms) - 10} más")
+            lines.append("")
+
+        # Términos sin señal de app (detector estricto)
+        if report.no_app_terms:
+            lines.append(f"NO-APP FILTRADOS ({len(report.no_app_terms)})")
+            lines.append("-" * 40)
+            no_app_names = [item.name for item in report.no_app_terms[:10]]
+            lines.append(f"  {', '.join(no_app_names)}")
+            if len(report.no_app_terms) > 10:
+                lines.append(f"  ...y {len(report.no_app_terms) - 10} más")
             lines.append("")
 
         # Estadísticas
@@ -925,10 +1236,10 @@ class ReportGenerator:
             rows.append([f"✨ APPS NUEVAS ({len(report.new_apps)})", "", "", "", "", ""])
             rows.append(["App", "Tipo", "Países", "Score", "Novedad", "Link"])
             for item in report.new_apps:
-                tipo = "🔥 Rising" if item.is_rising else "📈 Top"
+                tipo = self._sheet_tipo(item)
                 countries = ', '.join(list(set(item.countries))[:5])
                 link = item.links[0] if item.links else ""
-                rows.append([item.name, tipo, countries, item.max_value, "🆕 Nueva", link])
+                rows.append([item.name, tipo, countries, self._format_score(item), "🆕 Nueva", link])
             rows.append(["", "", "", "", "", ""])
 
         # Tendencias globales
@@ -939,7 +1250,7 @@ class ReportGenerator:
                 countries = ', '.join(list(set(item.countries)))
                 vel = item.velocity if item.velocity else ""
                 link = item.links[0] if item.links else ""
-                rows.append([item.name, countries, str(item.spread_score), item.max_value, vel, link])
+                rows.append([item.name, countries, str(item.spread_score), self._format_score(item), vel, link])
             rows.append(["", "", "", "", "", ""])
 
         # Sección de apps detectadas
@@ -948,14 +1259,14 @@ class ReportGenerator:
             rows.append(["App", "Tipo", "Países", "Score", "Versiones", "Link"])
 
             for item in report.potential_apps:
-                tipo = "🔥 Rising" if item.is_rising else "📈 Top"
+                tipo = self._sheet_tipo(item)
                 countries = ', '.join(list(set(item.countries))[:5])
                 if len(set(item.countries)) > 5:
                     countries += "..."
                 versions = ', '.join(item.versions[:3]) if item.versions else ""
                 link = item.links[0] if item.links else ""
 
-                rows.append([item.name, tipo, countries, item.max_value, versions, link])
+                rows.append([item.name, tipo, countries, self._format_score(item), versions, link])
 
             rows.append(["", "", "", "", "", ""])  # Línea vacía
 
@@ -965,11 +1276,28 @@ class ReportGenerator:
             rows.append(["App", "Tipo", "Países", "Score", "Razón", "Link"])
 
             for item in report.watchlist_apps:
-                tipo = "🔥 Rising" if item.is_rising else "📈 Top"
+                tipo = self._sheet_tipo(item)
                 countries = ', '.join(list(set(item.countries))[:3])
                 link = item.links[0] if item.links else ""
 
-                rows.append([item.name, tipo, countries, item.max_value, item.review_reason, link])
+                rows.append([item.name, tipo, countries, self._format_score(item), item.review_reason, link])
+
+            rows.append(["", "", "", "", "", ""])
+
+        # Sección de casino / betting (al final, mismas columnas que apps)
+        if report.casino_apps:
+            rows.append([f"🎰 CASINO / BETTING ({len(report.casino_apps)})", "", "", "", "", ""])
+            rows.append(["App", "Tipo", "Países", "Score", "Versiones", "Link"])
+
+            for item in report.casino_apps:
+                tipo = self._sheet_tipo(item)
+                countries = ', '.join(list(set(item.countries))[:5])
+                if len(set(item.countries)) > 5:
+                    countries += "..."
+                versions = ', '.join(item.versions[:3]) if item.versions else ""
+                link = item.links[0] if item.links else ""
+
+                rows.append([item.name, tipo, countries, self._format_score(item), versions, link])
 
             rows.append(["", "", "", "", "", ""])
 
@@ -980,6 +1308,10 @@ class ReportGenerator:
         if report.generic_terms:
             generic_names = [item.name for item in report.generic_terms[:8]]
             rows.append([f"Genéricos filtrados ({len(report.generic_terms)}): {', '.join(generic_names)}", "", "", "", "", ""])
+
+        if report.no_app_terms:
+            no_app_names = [item.name for item in report.no_app_terms[:8]]
+            rows.append([f"No-app filtrados ({len(report.no_app_terms)}): {', '.join(no_app_names)}", "", "", "", "", ""])
 
         # No retornamos headers separados porque están incluidos en las filas
         return [], rows
