@@ -10,7 +10,9 @@ on:
     - cron: '50 4,16 * * *'   # group_3: AU, VN, DE, RU
     - cron: '15 7,19 * * *'   # group_4: TH, FR, IT, CO
     - cron: '40 9,21 * * *'   # group_5: JP, TR, RO, NG
-    - cron: '0 23 * * *'      # digest: consolidado diario
+    # digest: 07:00 UTC ~= 9h Madrid (CEST) / 8h Madrid (CET, +-1h estacional
+    # inevitable con cron fijo). Consolida el día UTC ANTERIOR completo.
+    - cron: '0 7 * * *'       # digest: consolidado diario (día anterior)
 
   # Permitir ejecución manual desde GitHub
   workflow_dispatch:
@@ -53,7 +55,7 @@ jobs:
               "50 4,16 * * *")   echo "group=group_3" >> $GITHUB_OUTPUT ;;
               "15 7,19 * * *")   echo "group=group_4" >> $GITHUB_OUTPUT ;;
               "40 9,21 * * *")   echo "group=group_5" >> $GITHUB_OUTPUT ;;
-              "0 23 * * *")      echo "group=digest"   >> $GITHUB_OUTPUT ;;
+              "0 7 * * *")       echo "group=digest"   >> $GITHUB_OUTPUT ;;
               *)
                 echo "::error::Unknown schedule trigger: '$CRON'"
                 exit 1
@@ -114,16 +116,47 @@ jobs:
           fi
         timeout-minutes: 90
 
-      # Commit del digest Markdown + dashboard del README.
-      # Además de publicar el informe, este commit diario actúa como keepalive:
-      # evita que GitHub desactive el workflow tras 60 días sin actividad.
+      # Commit del estado del README (neutro, sin datos de negocio) +
+      # country_tiers.json. Este repo es PÚBLICO: reports/ (el digest
+      # completo con nombres de apps) NUNCA se commitea aquí — ver el
+      # step "Push digest to private archive" más abajo.
+      # El commit diario sigue actuando como keepalive: evita que GitHub
+      # desactive el workflow tras 60 días sin actividad.
       - name: Commit digest reports
         if: success() && needs.determine-group.outputs.group == 'digest'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add reports/ README.md country_tiers.json
-          git diff --cached --quiet || (git commit -m "chore(digest): daily report $(date -u +%F) [skip ci]" && git pull --rebase origin main && git push)
+          git add README.md country_tiers.json
+          git diff --cached --quiet || (git commit -m "chore(digest): status update $(date -u +%F) [skip ci]" && git pull --rebase origin main && git push)
+
+      # Archiva el digest completo (con nombres de apps) en el repo PRIVADO
+      # gemelo Kirkizillo/gtrends-archive-private — nunca en este repo
+      # público. Requiere el secret PRIVATE_ARCHIVE_TOKEN (fine-grained PAT
+      # con permiso Contents:write limitado a ese repo). Si el secret aún
+      # no existe, el step degrada limpio (avisa y no falla el job) —
+      # ver TODO.md para los pasos de creación del token.
+      - name: Push digest to private archive
+        if: success() && needs.determine-group.outputs.group == 'digest'
+        env:
+          PRIVATE_ARCHIVE_TOKEN: ${{ secrets.PRIVATE_ARCHIVE_TOKEN }}
+          PRIVATE_ARCHIVE_REPO: Kirkizillo/gtrends-archive-private
+        run: |
+          if [ -z "$PRIVATE_ARCHIVE_TOKEN" ]; then
+            echo "::warning::PRIVATE_ARCHIVE_TOKEN no configurado — se omite el archivo privado. Ver TODO.md."
+            exit 0
+          fi
+          TODAY=$(date -u +%F)
+          rm -rf /tmp/private-archive
+          git clone --depth 1 "https://x-access-token:${PRIVATE_ARCHIVE_TOKEN}@github.com/${PRIVATE_ARCHIVE_REPO}.git" /tmp/private-archive
+          mkdir -p /tmp/private-archive/reports
+          cp "reports/digest_${TODAY}.md" /tmp/private-archive/reports/ 2>/dev/null || echo "Sin digest_${TODAY}.md que copiar"
+          cp reports/latest.md /tmp/private-archive/reports/ 2>/dev/null || true
+          cd /tmp/private-archive
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add reports/
+          git diff --cached --quiet || (git commit -m "digest ${TODAY}" && git push)
 
       - name: Upload logs as artifact
         if: always()

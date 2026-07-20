@@ -5,21 +5,11 @@ Sistema automatizado para extraer datos de Google Trends y exportarlos a Google 
 **Estado:** Estable. 100% de éxito desde 2026-02-03 (~200+ runs consecutivos). Los datos se exportan correctamente a Google Sheets en cada ejecución.
 
 <!-- DASHBOARD:START -->
-## Dashboard
+## Estado
 
-**Ultima actualizacion:** 2026-07-15 23:52 UTC
+**⚠️ Modo degradado (Turso no disponible)** — última ejecución: 2026-07-20 12:22 UTC
 
-**Volumen hoy:** 878 registros (+15.4% vs ayer)
-
-**Top 5 apps del dia:**
-
-1. **minecraft** — 13x (WW, IN, US)
-2. **instagram download apk** — 11x (IN, BR, ID)
-3. **youtube download apk** — 9x (WW, IN, BR)
-4. **apkpure** — 9x (US, BR, ID)
-5. **whatsapp download** — 8x (WW, IN, US)
-
-[Ver digest completo](reports/latest.md)
+📬 Los informes detallados se envían al equipo por Slack (canal privado).
 <!-- DASHBOARD:END -->
 
 ## Características

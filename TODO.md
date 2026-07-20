@@ -1,6 +1,52 @@
 # TODO - Google Trends Monitor
 
-## Pendiente de acción del usuario (2026-07-07)
+## Pendiente de acción del usuario (2026-07-20) — digest privado
+
+El repo `Kirkizillo/gtrends` es **público**. Hasta el 20 de julio, el README y
+`reports/*.md` exponían nombres de apps top por día (inteligencia competitiva).
+Se ha cortado la fuga a partir de ahora (README neutro, `reports/` ya no se
+commitea al repo público) y se ha creado el repo privado gemelo
+**`Kirkizillo/gtrends-archive-private`** para el archivo completo. Faltan dos
+piezas manuales — GitHub no permite crear tokens ni webhooks vía API:
+
+### 1. Crear `PRIVATE_ARCHIVE_TOKEN` (para que el workflow archive el digest)
+
+1. GitHub → tu avatar → **Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token**.
+2. Nombre: `gtrends-archive-write` (o el que prefieras). Expiración: sin límite o la que uses habitualmente.
+3. **Resource owner:** tu cuenta (`Kirkizillo`).
+4. **Repository access:** "Only select repositories" → `gtrends-archive-private` (solo ese repo, no todos).
+5. **Permissions → Repository permissions → Contents:** `Read and write`. El resto por defecto.
+6. Generar y copiar el token (una sola vez, no se vuelve a mostrar).
+7. En `Kirkizillo/gtrends` → **Settings → Secrets and variables → Actions → New repository secret**: nombre `PRIVATE_ARCHIVE_TOKEN`, valor el token copiado.
+
+Sin este secret, el step "Push digest to private archive" del workflow avisa (`::warning::`) y se omite sin fallar el job — no bloquea nada mientras tanto.
+
+### 2. Crear `SLACK_WEBHOOK_URL` (para recibir el digest en Slack)
+
+1. En Slack: crea (o reutiliza) una app en https://api.slack.com/apps → **Incoming Webhooks** → activarlo.
+2. **Add New Webhook to Workspace** → elige el **canal privado** donde debe llegar el digest.
+3. Copia la Webhook URL (`https://hooks.slack.com/services/...`).
+4. En `Kirkizillo/gtrends` → **Settings → Secrets and variables → Actions → New repository secret**: nombre `SLACK_WEBHOOK_URL`, valor la URL copiada.
+
+Sin este secret, `notify_slack_success()` se omite silenciosamente (ya funciona así desde antes). Antes de crearlo de verdad, revisa la [vista previa](../logs/slack_blocks_preview.json) generada con `python digest.py --preview-slack` — pégala en `app.slack.com/block-builder` para confirmar el render exacto.
+
+### 3. Nota de riesgo — historial ya expuesto (decisión pendiente, no ejecutada)
+
+Los commits de `reports/*.md` entre el 9 y el 20 de julio (2026) **siguen siendo
+públicos en el historial de git** del repo, aunque a partir de ahora no se
+añadan más. Purgarlos requeriría reescribir el historial (`git filter-repo` +
+force-push), una operación destructiva que puede romper cualquier fork/clon
+existente. No se ha hecho — decidir aparte si merece la pena para este caso.
+
+### 4. Ideas no implementadas — email como canal adicional
+
+El usuario eligió Slack como canal principal (no "ambos"). Si en el futuro se
+quiere también email (para gente sin Slack, o un resumen tipo newsletter):
+servicio gratuito recomendado **Resend** (~100 emails/día gratis, una sola
+llamada a su API REST, sin SMTP). Reutilizaría el HTML ya generado por
+`generate_digest_html()` como cuerpo del correo — la mayor parte del trabajo
+(contenido, estilos) ya está hecho; solo faltaría la llamada HTTP + lista de
+destinatarios.
 
 ### Solicitar acceso al alpha del API oficial de Google Trends
 
