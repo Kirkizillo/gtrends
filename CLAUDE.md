@@ -88,12 +88,14 @@ python main.py --setup
 - Optional — system continues working without Turso (Google Sheets only)
 - Embedded replica mode: local temp file + cloud sync
 
-**digest.py** - Daily digest (23:00 UTC cron):
-- Consolidates all 10 daily runs into single HTML report
-- Sections: volume comparison (vs yesterday), top 15 apps, new apps, region activity heatmap
-- On Sundays: also generates weekly report and triggers tab cleanup
-- `--weekly` flag to force weekly report on any day
-- Output: `logs/digest_YYYY-MM-DD.html`
+**digest.py** - Daily digest (07:00 UTC cron, ~9h Madrid):
+- Consolidates the full PREVIOUS UTC day's runs (default date = yesterday, not today — the day is only fully closed by 07:00 UTC the next morning)
+- Outputs three formats from one `fetch_digest_data()` call: HTML (`logs/digest_YYYY-MM-DD.html`, ephemeral artifact), Markdown (`reports/digest_YYYY-MM-DD.md`, committed archive), and Slack Block Kit (`build_slack_digest_blocks()`, sent via `notify_slack_success()` to a private channel — never the public repo)
+- Sections: volume comparison (vs day before), top apps (up to 25, capped per-format for display), new apps, region activity, casino/betting demoted to its own section (reuses `report_generator.CASINO_PATTERNS`)
+- `get_today_top_apps()` (database.py) deduplicates space-collapsed name variants ("789 Bingo" == "789bingo") after over-fetching from SQL, mirroring `report_generator._get_base_app_name`
+- On Sundays (checked against the reported date, not the run date): also generates weekly report and triggers tab cleanup
+- `--weekly` flag to force weekly report; `--preview-slack` to render Slack blocks to `logs/slack_blocks_preview.json` without sending/connecting live
+- Degrades cleanly if Turso is unreachable: emits a "modo degradado" digest and still commits (keepalive)
 
 **weekly_report.py** - Weekly HTML report:
 - Top 10 apps per market (20 countries), new apps by region, cross-market trends (3+ countries)
@@ -118,7 +120,9 @@ Runs 11 times daily (5 groups × 2 runs + 1 digest), staggered ~2h25min apart:
 - 04:50, 16:50 UTC → group_3 (AU, VN, DE, RU)
 - 07:15, 19:15 UTC → group_4 (TH, FR, IT, CO)
 - 09:40, 21:40 UTC → group_5 (JP, TR, RO, NG)
-- 23:00 UTC → digest (daily consolidation + weekly on Sundays)
+- 07:00 UTC → digest (consolidates the day BEFORE; weekly report if that day was a Sunday)
+
+Actual scans per run also depend on the adaptive per-country tier (`country_tiers.json` — see `main.py::should_scan_country`): `high` tier scans every run, `medium` only the morning run, `low` only the morning run every 3rd day.
 
 Group detection uses `github.event.schedule` for deterministic cron-to-group mapping (immune to GitHub Actions scheduling delays).
 

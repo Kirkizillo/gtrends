@@ -2,12 +2,16 @@
 Generador de digest diario.
 
 Consolida todos los datos del día (de las 10 runs) en un informe
-HTML que muestra: top apps, apps nuevas, actividad por región, y
-comparación vs día anterior.
+HTML/Markdown/Slack que muestra: top apps, apps nuevas, actividad por
+región, y comparación vs día anterior.
+
+Cron: 07:00 UTC (~9h Madrid) — consolida el día UTC ANTERIOR completo,
+ya cerrado a esa hora. Sin --date, el default es "ayer", no "hoy".
 
 Uso:
-    python digest.py             # Genera digest del día actual
-    python digest.py --date 2026-03-10   # Genera digest de fecha específica
+    python digest.py                      # Genera digest de AYER (default)
+    python digest.py --date 2026-03-10    # Genera digest de fecha específica
+    python digest.py --preview-slack      # Preview de Slack sin enviar nada
 """
 import argparse
 import glob
@@ -15,9 +19,10 @@ import json
 import logging
 import os
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import config
+import render_utils
 from database import TrendsDatabase
 
 logging.basicConfig(
@@ -62,11 +67,15 @@ def fetch_digest_data(db: TrendsDatabase, date: str = None) -> dict:
 
     data = {
         'date': date,
-        'top_apps': _safe(lambda: db.get_today_top_apps(limit=15, date=date), []),
+        # Límite compartido por HTML/Markdown/Slack. 25 en vez de 18 (el cap
+        # de Slack) para tener margen: los items casino se separan después
+        # y no deben restar cupo a las apps normales mostradas.
+        'top_apps': _safe(lambda: db.get_today_top_apps(limit=25, date=date), []),
         'new_apps': _safe(lambda: db.get_today_new_apps(date=date), []),
         'region_activity': _safe(lambda: db.get_region_activity(date=date), []),
         'comparison': _safe(lambda: db.get_daily_comparison(date=date),
                             {'today': 0, 'yesterday': 0, 'change_pct': 0.0}),
+        'history_7d': _safe(lambda: db.get_volume_last_n_days(7), []),
     }
     data['degraded'] = degraded
     return data
@@ -173,7 +182,7 @@ def _top_apps_section(apps: list) -> str:
         </tr>"""
     return f"""
 <div class="card">
-    <h2>Top 15 Apps del Dia</h2>
+    <h2>Top {len(apps)} Apps del Dia</h2>
     <table>
         <tr><th>#</th><th>App</th><th>Apariciones</th><th>Tipo</th><th>Paises</th></tr>
         {rows}
@@ -330,7 +339,7 @@ def generate_digest_markdown(data: dict) -> str:
         f"|-----|------|--------|",
         f"| {today} | {yesterday} | {sign}{change}% |",
         "",
-        "## Top 15 Apps del Dia",
+        f"## Top {len(top_apps)} Apps del Dia" if top_apps else "## Top Apps del Dia",
         "",
     ]
 
@@ -374,6 +383,167 @@ def generate_digest_markdown(data: dict) -> str:
 
 
 # =============================================================================
+# Digest para Slack (Block Kit) — canal privado, NO el repo público
+# =============================================================================
+
+# Repo privado gemelo que archiva el digest completo (con nombres de apps).
+# Nunca el repo público — ver Push digest to private archive en el workflow.
+PRIVATE_ARCHIVE_URL = "https://github.com/Kirkizillo/gtrends-archive-private/blob/main/reports/latest.md"
+
+# Cabe de sobra dentro del límite de 3000 caracteres por section de Slack
+# (~18 líneas de ~70 chars y ~15 de ~40 chars quedan muy por debajo).
+TOP_APPS_CAP = 18
+NEW_APPS_CAP = 15
+CASINO_CAP = 5  # sección demotada a propósito: se mantiene compacta
+REGIONS_CAP = 5
+
+
+def _slack_esc(text: str) -> str:
+    """Escapa los caracteres especiales de Slack mrkdwn (&, <, >)."""
+    if not text:
+        return ""
+    return str(text).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+
+
+def _slack_tldr(data: dict, app_items: list, casino_items: list) -> str:
+    """Una frase con el hallazgo más relevante del día."""
+    if data.get('degraded'):
+        return (":warning: *Modo degradado* — Turso no disponible hoy. "
+                "Los datos siguen llegando a Google Sheets con normalidad.")
+
+    new_apps = data.get('new_apps') or []
+    if app_items:
+        top = app_items[0]
+        countries = ", ".join(render_utils.flag_or_code(c) for c in top['countries'][:3])
+        extra = f" (+{len(top['countries']) - 3} más)" if len(top['countries']) > 3 else ""
+        return (f":fire: *{_slack_esc(top['title'])}* lidera hoy con {top['count']}x "
+                f"en {countries}{extra} — {len(new_apps)} apps nuevas detectadas.")
+    if casino_items:
+        return (f":slot_machine: Sin apps destacadas hoy, pero {len(casino_items)} "
+                f"términos de casino/apuestas en alta actividad.")
+    return "Sin actividad destacada hoy."
+
+
+def build_slack_digest_blocks(data: dict, history_7d: list = None,
+                               full_report_url: str = None) -> list:
+    """
+    Construye el mensaje de Slack (Block Kit) para el digest diario.
+
+    A diferencia del Markdown/HTML (pensados para archivo/histórico), este
+    formato prioriza legibilidad para alguien sin acceso a Sheets: TL;DR
+    arriba, sparkline de 7 días, banderas por país, sección casino demotada.
+
+    Args:
+        data: Dict de fetch_digest_data()
+        history_7d: Lista de {date, count} de db.get_volume_last_n_days(7).
+                    Si es None, se usa data['history_7d'] (fetch_digest_data
+                    ya la incluye); sin ninguna de las dos se omite el sparkline.
+        full_report_url: URL del informe completo en el repo privado
+                         (opcional; sin ella se omite el enlace)
+
+    Returns:
+        Lista de blocks de Slack Block Kit
+    """
+    if history_7d is None:
+        history_7d = data.get('history_7d')
+    comp = data.get('comparison') or {'today': 0, 'yesterday': 0, 'change_pct': 0.0}
+    top_apps = data.get('top_apps') or []
+    new_apps = data.get('new_apps') or []
+    regions = data.get('region_activity') or []
+    date = data.get('date', '?')
+
+    # Reutiliza la misma clasificación casino que los informes por-run
+    # (report_generator.CASINO_PATTERNS) para no duplicar la regex ni
+    # divergir en qué cuenta como casino/apuestas.
+    from report_generator import CASINO_PATTERNS
+    app_items, casino_items = [], []
+    for item in top_apps:
+        is_casino = CASINO_PATTERNS.search(item['title'].lower())
+        (casino_items if is_casino else app_items).append(item)
+
+    blocks = [
+        {"type": "header", "text": {"type": "plain_text",
+         "text": f"📊 Digest Trends — {date}", "emoji": True}},
+        {"type": "section", "text": {"type": "mrkdwn",
+         "text": _slack_tldr(data, app_items, casino_items)}},
+        {"type": "divider"},
+    ]
+
+    if not data.get('degraded'):
+        # Volumen + sparkline de 7 días
+        arrow = render_utils.trend_arrow(comp['change_pct'])
+        vol_lines = [
+            f"*Volumen del día:* {comp['today']} registros {arrow} "
+            f"({comp['change_pct']:+.1f}% vs ayer, {comp['yesterday']} ayer)"
+        ]
+        if history_7d:
+            values = [d['count'] for d in history_7d]
+            spark = render_utils.sparkline(values)
+            vol_lines.append(f"`{spark}` _(últimos {len(values)} días)_")
+        blocks.append({"type": "section", "text": {"type": "mrkdwn",
+                       "text": "\n".join(vol_lines)}})
+
+        # Top apps (banderas, marcador rising/top, sin casino)
+        if app_items:
+            lines = ["*🔥 Top apps de hoy:*"]
+            for item in app_items[:TOP_APPS_CAP]:
+                countries = ", ".join(render_utils.flag_or_code(c) for c in item['countries'][:3])
+                extra = f" +{len(item['countries']) - 3}" if len(item['countries']) > 3 else ""
+                url = item.get('link', '')
+                name = _slack_esc(item['title'])
+                name_fmt = f"<{url}|{name}>" if url else name
+                marker = "🔥" if any('rising' in dt for dt in item.get('data_types') or []) else "📈"
+                lines.append(f"• {marker} *{name_fmt}* — {item['count']}x ({countries}{extra})")
+            if len(app_items) > TOP_APPS_CAP:
+                lines.append(f"_+{len(app_items) - TOP_APPS_CAP} más en el informe completo_")
+            blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "\n".join(lines)}})
+        else:
+            blocks.append({"type": "section", "text": {"type": "mrkdwn",
+                           "text": "_Sin apps detectadas hoy._"}})
+
+        # Apps nuevas
+        if new_apps:
+            lines = [f"*🆕 Apps nuevas hoy ({len(new_apps)}):*"]
+            for item in new_apps[:NEW_APPS_CAP]:
+                countries = ", ".join(render_utils.flag_or_code(c) for c in (item.get('countries') or [])[:3])
+                lines.append(f"• {_slack_esc(item['display_name'])} ({countries})")
+            if len(new_apps) > NEW_APPS_CAP:
+                lines.append(f"_+{len(new_apps) - NEW_APPS_CAP} más_")
+            blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "\n".join(lines)}})
+
+        # Regiones más activas (una línea compacta como contexto)
+        if regions:
+            top_regions = regions[:REGIONS_CAP]
+            region_line = " · ".join(
+                f"{render_utils.flag_or_code(r['country_code'])} {r['count']}" for r in top_regions
+            )
+            blocks.append({"type": "context", "elements": [
+                {"type": "mrkdwn", "text": f"*Regiones más activas:* {region_line}"}
+            ]})
+
+        # Casino/Betting — demotado a propósito: divisor + sección aparte al
+        # final, capada corta (no forma parte del pedido de "más nombres",
+        # que aplica solo a apps normales/nuevas).
+        if casino_items:
+            blocks.append({"type": "divider"})
+            lines = [f"*🎰 Casino / Betting ({len(casino_items)}) — informativo, no editorial:*"]
+            for item in casino_items[:CASINO_CAP]:
+                countries = ", ".join(render_utils.flag_or_code(c) for c in item['countries'][:2])
+                lines.append(f"• {_slack_esc(item['title'])} — {item['count']}x ({countries})")
+            if len(casino_items) > CASINO_CAP:
+                lines.append(f"_+{len(casino_items) - CASINO_CAP} más_")
+            blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "\n".join(lines)}})
+
+    blocks.append({"type": "divider"})
+    footer = f"Digest generado {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}"
+    if full_report_url:
+        footer += f" · <{full_report_url}|Ver informe completo>"
+    blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": footer}]})
+
+    return blocks
+
+
+# =============================================================================
 # Dashboard en README.md (bloque entre marcadores, actúa como keepalive:
 # el commit diario evita que GitHub desactive el workflow por inactividad)
 # =============================================================================
@@ -384,8 +554,14 @@ DASHBOARD_END = "<!-- DASHBOARD:END -->"
 
 def update_readme_dashboard(data: dict, readme_path: str = None) -> bool:
     """
-    Reescribe el bloque de dashboard del README.md entre los marcadores
+    Reescribe el bloque de estado del README.md entre los marcadores
     DASHBOARD:START y DASHBOARD:END.
+
+    IMPORTANTE: este repo es PÚBLICO. El bloque debe mostrar solo estado
+    operativo (última ejecución, salud) — NUNCA nombres de apps, volúmenes
+    ni ningún dato de negocio. El digest completo va al canal privado de
+    Slack y al repo privado gemelo (gtrends-archive-private); nunca aquí.
+    El propio commit de este bloque sigue actuando como keepalive.
 
     Args:
         data: Dict de fetch_digest_data()
@@ -408,28 +584,17 @@ def update_readme_dashboard(data: dict, readme_path: str = None) -> bool:
         logger.warning("Marcadores de dashboard no encontrados en README.md")
         return False
 
-    comp = data['comparison']
-    change = comp.get('change_pct', 0)
-    sign = "+" if change >= 0 else ""
-
-    top5 = ""
-    for i, app in enumerate(data['top_apps'][:5], 1):
-        countries = ', '.join(app['countries'][:3])
-        top5 += f"{i}. **{_md_esc(app['title'])}** — {app['count']}x ({_md_esc(countries)})\n"
-    if not top5:
-        top5 = "Sin datos\n"
+    status_line = (
+        "⚠️ Modo degradado (Turso no disponible)" if data.get('degraded')
+        else "✅ Operativo"
+    )
 
     block = f"""{DASHBOARD_START}
-## Dashboard
+## Estado
 
-**Ultima actualizacion:** {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}
+**{status_line}** — última ejecución: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}
 
-**Volumen hoy:** {comp.get('today', 0)} registros ({sign}{change}% vs ayer)
-
-**Top 5 apps del dia:**
-
-{top5}
-[Ver digest completo](reports/latest.md)
+📬 Los informes detallados se envían al equipo por Slack (canal privado).
 {DASHBOARD_END}"""
 
     start_idx = content.index(DASHBOARD_START)
@@ -439,7 +604,7 @@ def update_readme_dashboard(data: dict, readme_path: str = None) -> bool:
     with open(readme_path, 'w', encoding='utf-8') as f:
         f.write(new_content)
 
-    logger.info("Dashboard del README.md actualizado")
+    logger.info("Estado del README.md actualizado (neutro, sin datos de negocio)")
     return True
 
 
@@ -567,34 +732,126 @@ def format_retier_section(changes: list) -> str:
     return "\n".join(lines)
 
 
-def notify_slack_success(data: dict) -> bool:
+def _mock_digest_data(date: str) -> dict:
     """
-    Notificación de éxito a Slack con resumen del digest (TODO.md pendiente).
+    Dataset de ejemplo (basado en patrones reales observados en producción,
+    jul-2026) para previsualizar el digest de Slack sin depender de Turso.
+    Ejercita todas las secciones: top apps, nuevas, casino, regiones, sparkline.
+    """
+    return {
+        'date': date,
+        'degraded': False,
+        'comparison': {'today': 878, 'yesterday': 761, 'change_pct': 15.4},
+        'top_apps': [
+            {'title': 'minecraft', 'count': 13, 'countries': ['WW', 'IN', 'US'],
+             'data_types': ['queries_rising'], 'link': 'https://trends.google.com/trends/explore?q=minecraft&geo=WW'},
+            {'title': 'instagram download apk', 'count': 11, 'countries': ['IN', 'BR', 'ID'],
+             'data_types': ['queries_top'], 'link': 'https://trends.google.com/trends/explore?q=instagram+download+apk&geo=IN'},
+            {'title': 'youtube download apk', 'count': 9, 'countries': ['WW', 'IN', 'BR'],
+             'data_types': ['queries_top'], 'link': 'https://trends.google.com/trends/explore?q=youtube+download+apk&geo=WW'},
+            {'title': 'capcut apk download', 'count': 9, 'countries': ['WW', 'IN', 'US'],
+             'data_types': ['queries_rising'], 'link': 'https://trends.google.com/trends/explore?q=capcut+apk+download&geo=IN'},
+            {'title': 'whatsapp download', 'count': 8, 'countries': ['WW', 'IN', 'US'],
+             'data_types': ['queries_top'], 'link': 'https://trends.google.com/trends/explore?q=whatsapp+download&geo=WW'},
+            {'title': 'roblox apk indir', 'count': 6, 'countries': ['TR'],
+             'data_types': ['queries_rising'], 'link': 'https://trends.google.com/trends/explore?q=roblox+apk+indir&geo=TR'},
+            {'title': '789 jackpots apk', 'count': 5, 'countries': ['IN'],
+             'data_types': ['queries_rising'], 'link': ''},
+            {'title': 'fire kirin xyz apk', 'count': 4, 'countries': ['US'],
+             'data_types': ['queries_rising'], 'link': ''},
+            {'title': 'winzo app download', 'count': 3, 'countries': ['IN'],
+             'data_types': ['queries_rising'], 'link': ''},
+        ],
+        'new_apps': [
+            {'display_name': 'Alight Motion Pro', 'countries': ['ID']},
+            {'display_name': 'Mobile Legends Bang Bang', 'countries': ['PH']},
+            {'display_name': 'GBWhatsApp APK', 'countries': ['NG']},
+            {'display_name': 'Pinduoduo', 'countries': ['NG']},
+        ],
+        'region_activity': [
+            {'country_code': 'IN', 'count': 145}, {'country_code': 'PH', 'count': 98},
+            {'country_code': 'BR', 'count': 87}, {'country_code': 'US', 'count': 76},
+            {'country_code': 'TR', 'count': 54}, {'country_code': 'ID', 'count': 41},
+        ],
+        'history_7d': [
+            {'date': '2026-07-14', 'count': 720}, {'date': '2026-07-15', 'count': 878},
+            {'date': '2026-07-16', 'count': 0}, {'date': '2026-07-17', 'count': 0},
+            {'date': '2026-07-18', 'count': 0}, {'date': '2026-07-19', 'count': 0},
+            {'date': '2026-07-20', 'count': 0},
+        ],
+    }
+
+
+def preview_slack_digest(date_str: str = None, output_path: str = None) -> str:
+    """
+    Genera los blocks del digest de Slack SIN enviar nada y SIN tocar git,
+    para revisar el diseño antes de crear el webhook real.
+
+    Intenta usar datos reales de Turso si está disponible; si no (como
+    durante el bloqueo de cuota de jul-2026), usa un dataset de ejemplo
+    representativo para poder revisar el diseño completo igualmente.
+
+    Returns:
+        Ruta del archivo JSON escrito (pegable en app.slack.com/block-builder)
+    """
+    # Mismo default que main(): "ayer", coherente con el cron a las 07:00 UTC
+    date_str = date_str or (datetime.utcnow() - timedelta(days=1)).strftime("%Y-%m-%d")
+    output_path = output_path or os.path.join(os.path.dirname(__file__), "logs", "slack_blocks_preview.json")
+
+    db = TrendsDatabase()
+    connected = db.connect(remote_only=True)
+    data = fetch_digest_data(db, date=date_str) if connected else None
+    if connected:
+        db.close()
+
+    used_mock = not data or data.get('degraded') or not data.get('top_apps')
+    if used_mock:
+        logger.info("Turso no disponible o sin datos del día — usando dataset de ejemplo para la previsualización")
+        data = _mock_digest_data(date_str)
+
+    blocks = build_slack_digest_blocks(
+        data, full_report_url=PRIVATE_ARCHIVE_URL
+    )
+
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    with open(output_path, 'w', encoding='utf-8') as f:
+        json.dump({"blocks": blocks}, f, ensure_ascii=False, indent=2)
+
+    logger.info(f"Preview de Slack generado: {output_path}")
+    logger.info("Datos: %s", "EJEMPLO (mock)" if used_mock else "reales de Turso")
+    logger.info("Pégalo en https://app.slack.com/block-builder para ver el render exacto de Slack")
+    return output_path
+
+
+def notify_slack_success(data: dict, full_report_url: str = None) -> bool:
+    """
+    Envía el digest completo (Block Kit) al canal privado de Slack.
     Solo actúa si SLACK_WEBHOOK_URL está definida. Nunca lanza excepciones.
+
+    IMPORTANTE: full_report_url debe apuntar al repo PRIVADO gemelo, nunca
+    al repo público — ese fue precisamente el problema de la versión anterior
+    (enlazaba de vuelta a github.com/Kirkizillo/gtrends, público).
     """
     webhook = os.getenv("SLACK_WEBHOOK_URL", "").strip()
     if not webhook:
         logger.info("SLACK_WEBHOOK_URL no definida, se omite notificación de éxito")
         return False
 
+    blocks = build_slack_digest_blocks(data, full_report_url=full_report_url)
+    # "text" es el fallback recomendado por Slack para notificaciones/lectores
+    # de pantalla, y lo que se muestra si algún bloque no renderiza.
     comp = data.get('comparison') or {}
-    top = data.get('top_apps') or []
-    new_apps = data.get('new_apps') or []
-    top_names = ", ".join(str(a.get('display_name', a.get('title', '?'))) for a in top[:5])
-    header = ":warning: *Digest DEGRADADO" if data.get('degraded') else ":chart_with_upwards_trend: *Digest"
-    text = (
-        f"{header} {data.get('date')}* — "
-        f"{comp.get('today', 0)} filas ({comp.get('change_pct', 0.0):+.1f}% vs ayer), "
-        f"{len(new_apps)} apps nuevas.\n"
-        f"Top: {top_names or 'sin datos'}\n"
-        f"<https://github.com/Kirkizillo/gtrends/blob/main/reports/latest.md|Ver informe completo>"
+    fallback_text = (
+        f"Digest degradado {data.get('date')}" if data.get('degraded')
+        else f"Digest {data.get('date')} — {comp.get('today', 0)} registros "
+             f"({comp.get('change_pct', 0.0):+.1f}% vs ayer)"
     )
     try:
         import requests
-        resp = requests.post(webhook, json={"text": text}, timeout=15)
+        resp = requests.post(webhook, json={"blocks": blocks, "text": fallback_text}, timeout=15)
         ok = resp.status_code < 300
         if not ok:
-            logger.warning(f"Slack devolvió {resp.status_code}")
+            logger.warning(f"Slack devolvió {resp.status_code}: {resp.text[:200]}")
         return ok
     except Exception as e:
         logger.warning(f"No se pudo notificar a Slack: {e}")
@@ -606,7 +863,13 @@ def main():
     parser.add_argument('--date', type=str, help="Fecha YYYY-MM-DD (default: hoy)")
     parser.add_argument('--weekly', action='store_true', help="Forzar generacion de informe semanal")
     parser.add_argument('--retier', action='store_true', help="Forzar reevaluacion mensual de tiers de escaneo")
+    parser.add_argument('--preview-slack', action='store_true',
+                        help="Genera logs/slack_blocks_preview.json sin enviar nada ni tocar git")
     args = parser.parse_args()
+
+    if args.preview_slack:
+        preview_slack_digest(date_str=args.date)
+        return
 
     # Conectar a Turso en modo remoto: sin replica local ni sync completo.
     # El embedded replica descargaba la BD entera (~107k filas) y agotaba
@@ -636,7 +899,10 @@ def main():
 
     # Obtener datos una vez, renderizar dos veces (HTML + Markdown)
     logger.info("Generando digest diario...")
-    date_str = args.date or datetime.utcnow().strftime("%Y-%m-%d")
+    # El cron corre a las 07:00 UTC (~9h Madrid) y consolida el día UTC
+    # ANTERIOR completo (ya cerrado a esa hora) — briefing tipo "periódico
+    # matutino", no el día en curso (que a las 07:00 UTC apenas ha arrancado).
+    date_str = args.date or (datetime.utcnow() - timedelta(days=1)).strftime("%Y-%m-%d")
     data = fetch_digest_data(db, date=date_str)
     html = generate_digest_html(data)
     markdown = generate_digest_markdown(data)
@@ -694,10 +960,13 @@ def main():
     prune_old_reports(reports_dir, days=90)
 
     # Notificación de éxito (opcional, requiere SLACK_WEBHOOK_URL)
-    notify_slack_success(data)
+    notify_slack_success(data, full_report_url=PRIVATE_ARCHIVE_URL)
 
-    # Informe semanal: se genera los domingos o con --weekly
-    is_sunday = datetime.utcnow().weekday() == 6
+    # Informe semanal: se genera cuando el DÍA REPORTADO (date_str) es domingo
+    # o con --weekly. Con el digest corriendo a las 07:00 UTC del día
+    # siguiente, "hoy" (el día del job) ya es lunes cuando date_str es el
+    # domingo que se está consolidando.
+    is_sunday = datetime.strptime(date_str, "%Y-%m-%d").weekday() == 6
     if (is_sunday or args.weekly) and connected and not data.get('degraded'):
         logger.info("Generando informe semanal...")
         try:

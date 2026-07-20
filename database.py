@@ -554,6 +554,13 @@ class TrendsDatabase:
         """
         Obtiene las apps más frecuentes del día.
 
+        La query SQL solo agrupa por lower(title) — no fusiona variantes como
+        "789 Bingo"/"789bingo" (que sí se fusionan en los informes por-run vía
+        report_generator._get_base_app_name). Para no divergir del Sheets,
+        se sobre-pide de SQL y se fusiona en Python por nombre sin espacios
+        antes de aplicar el `limit` real — así una app partida en variantes
+        no queda fuera del top por tener el conteo repartido.
+
         Args:
             limit: Máximo de apps a devolver
             date: Fecha YYYY-MM-DD para usar el día calendario [00:00, 24:00) UTC.
@@ -565,13 +572,17 @@ class TrendsDatabase:
         if not self.is_connected:
             return []
 
+        # Sobre-pedir antes de deduplicar: si no, una app partida en variantes
+        # podría perder su lugar en el top por tener el conteo repartido entre filas.
+        overfetch = max(limit * 5, 100)
+
         if date:
             start, end = self._day_bounds(date)
             where = "timestamp >= ? AND timestamp < ?"
-            params = (start, end, limit)
+            params = (start, end, overfetch)
         else:
             where = "timestamp >= datetime('now', '-1 day')"
-            params = (limit,)
+            params = (overfetch,)
 
         rows = self.conn.execute(
             f"""SELECT title, COUNT(*) as cnt,
@@ -586,14 +597,46 @@ class TrendsDatabase:
             params
         ).fetchall()
 
+        # Fusión por nombre sin espacios ("789 Bingo" ≡ "789bingo"), igual que
+        # report_generator. Se prefiere como título de display la variante con
+        # más espacios (más legible); en empate, la de mayor conteo individual.
+        merged: Dict[str, dict] = {}
+        for title, cnt, countries_csv, types_csv in rows:
+            key = self._normalize_title(title).replace(' ', '')
+            countries = countries_csv.split(',') if countries_csv else []
+            data_types = types_csv.split(',') if types_csv else []
+
+            if key not in merged:
+                merged[key] = {
+                    'title': title, 'count': cnt, 'title_count': cnt,
+                    'countries': set(countries), 'data_types': set(data_types),
+                    '_spaces': title.count(' '),
+                }
+                continue
+
+            existing = merged[key]
+            spaces = title.count(' ')
+            prefer_this_title = (
+                spaces > existing['_spaces'] or
+                (spaces == existing['_spaces'] and cnt > existing['title_count'])
+            )
+            existing['count'] += cnt
+            existing['countries'].update(countries)
+            existing['data_types'].update(data_types)
+            if prefer_this_title:
+                existing['title'] = title
+                existing['title_count'] = cnt
+                existing['_spaces'] = spaces
+
+        result = sorted(merged.values(), key=lambda x: -x['count'])[:limit]
         return [
             {
-                'title': row[0],
-                'count': row[1],
-                'countries': row[2].split(',') if row[2] else [],
-                'data_types': row[3].split(',') if row[3] else [],
+                'title': item['title'],
+                'count': item['count'],
+                'countries': sorted(item['countries']),
+                'data_types': sorted(item['data_types']),
             }
-            for row in rows
+            for item in result
         ]
 
     def get_today_new_apps(self, date: Optional[str] = None) -> list:
@@ -743,6 +786,38 @@ class TrendsDatabase:
         ).fetchall()
 
         return {row[0]: row[1] for row in rows}
+
+    def get_volume_last_n_days(self, n: int = 7) -> list:
+        """
+        Volumen diario (filas, excluye trending_rss) de los últimos N días
+        naturales UTC, incluido hoy. Una sola query agregada.
+
+        Usado para el sparkline del digest de Slack. Días sin datos
+        aparecen con volumen 0 (no se omiten, para que el sparkline
+        mantenga longitud fija).
+
+        Returns:
+            Lista de {date: 'YYYY-MM-DD', count: int} ordenada cronológicamente,
+            longitud siempre == n.
+        """
+        if not self.is_connected:
+            return []
+
+        rows = self.conn.execute(
+            f"""SELECT substr(timestamp, 1, 10) as day, COUNT(*)
+               FROM trends
+               WHERE timestamp >= datetime('now', '-{int(n) - 1} days', 'start of day')
+               AND data_type != 'trending_rss'
+               GROUP BY day"""
+        ).fetchall()
+        counts = {row[0]: row[1] for row in rows}
+
+        today = datetime.now(timezone.utc).date()
+        result = []
+        for i in range(n - 1, -1, -1):
+            day = (today - timedelta(days=i)).strftime("%Y-%m-%d")
+            result.append({'date': day, 'count': counts.get(day, 0)})
+        return result
 
     # =========================================================================
     # Consultas para informe semanal
